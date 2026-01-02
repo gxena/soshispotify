@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: spotify-scraper
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: DEFAULT_PLAYLIST_ID
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: spotify-db
+          property: connectionString
+
+databases:
+  - name: spotify-db
+    databaseName: spotify_data
+    user: spotify_user

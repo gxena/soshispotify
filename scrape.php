@@ -4,6 +4,8 @@ require_once 'api_helper.php';
 
 // Handle form submission
 $logMessage = '';
+$useRealTimeLogging = true; // Set to true for real-time logging
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
     $date = $_POST['date'] ?? date('Y-m-d', strtotime('-1 day'));
     $clientToken = $_POST['client_token'] ?? '';
@@ -14,8 +16,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
     if (empty($clientToken) || empty($authBearer)) {
         $logMessage = "ERROR: Client Token and Authorization Bearer are required!";
     } else {
+        // Try real-time logging if enabled
+        if ($useRealTimeLogging) {
+            // Disable output buffering for real-time updates
+            @ini_set('output_buffering', 'off');
+            @ini_set('zlib.output_compression', false);
+            @ini_set('implicit_flush', true);
+            @ob_end_clean();
+            header('Content-Type: text/html; charset=utf-8');
+            
+            echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Scraping...</title>';
+            echo '<link rel="stylesheet" href="assets/css/style.css"></head><body>';
+            echo '<div class="dashboard-container"><main class="main-content">';
+            echo '<div class="card"><div class="card-header"><h2>Scraping Progress</h2></div>';
+            echo '<div class="log-body"><div class="log-output"><pre id="liveLog">';
+            
+            ob_flush();
+            flush();
+        }
+        
         $logMessage = "=== Scraping Data from Spotify ===\n";
         $logMessage .= "Date: " . $date . "\n\n";
+        
+        if ($useRealTimeLogging) {
+            echo htmlspecialchars($logMessage);
+            ob_flush();
+            flush();
+        }
         
         // Prepare headers
         $headers = [
@@ -48,14 +75,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                     "extensions" => [
                         "persistedQuery" => [
                             "version" => 1,
-                            "sha256Hash" => "e101aead6d78faa11571f895fc425186d6ad255f2b1f41a2f8feeacd4f6a6b9b"
+                            "sha256Hash" => "612585ae06ba435ad26369870deaae23b5c8800a256cd8a57e08eddc25a37294"
                         ]
                     ]
                 ];
                 
                 // Make cURL request
                 $ch = curl_init();
-                curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v1/query");
+                curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v2/query");
                 curl_setopt($ch, CURLOPT_POST, true);
                 curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($graphqlQuery));
                 curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
@@ -79,18 +106,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                     if ($streamCount > 0) {
                         // Insert into streams table: track_id, stream_date, stream_count
                         if (insertStreamData($trackId, $date, $streamCount)) {
-                            $logMessage .= $trackName . " -> [" . number_format($streamCount) . "]\n";
+                            $msg = $trackName . " -> [" . number_format($streamCount) . "]\n";
+                            $logMessage .= $msg;
+                            if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
                             $successCount++;
                         } else {
-                            $logMessage .= "❌ " . $trackName . " -> DB Error\n";
+                            $msg = "❌ " . $trackName . " -> DB Error\n";
+                            $logMessage .= $msg;
+                            if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
                             $errorCount++;
                         }
                     } else {
-                        $logMessage .= "⚠️ " . $trackName . " -> No playcount data\n";
+                        $msg = "⚠️ " . $trackName . " -> No playcount data\n";
+                        $logMessage .= $msg;
+                        if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
                         $errorCount++;
                     }
                 } else {
-                    $logMessage .= "❌ " . $trackName . " -> API Error (HTTP " . $httpCode . ")\n";
+                    $msg = "❌ " . $trackName . " -> API Error (HTTP " . $httpCode . ")\n";
+                    $logMessage .= $msg;
+                    if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
+                    if ($httpCode == 401) {
+                        $msg = "   → Token expired! Get new tokens from Spotify Web Player\n";
+                        $logMessage .= $msg;
+                        if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
+                    }
                     $errorCount++;
                 }
                 
@@ -98,9 +138,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
             }
         }
         
-        $logMessage .= "\n=== Summary ===\n";
-        $logMessage .= "✅ Success: " . $successCount . " tracks\n";
-        $logMessage .= "❌ Errors: " . $errorCount . " tracks\n";
+        $summary = "\n=== Summary ===\n";
+        $summary .= "✅ Success: " . $successCount . " tracks\n";
+        $summary .= "❌ Errors: " . $errorCount . " tracks\n";
+        $logMessage .= $summary;
+        if ($useRealTimeLogging) { echo htmlspecialchars($summary); ob_flush(); flush(); }
         
         // Save artist stats if provided
         if (!empty($monthlyListeners) || !empty($followers)) {
@@ -112,15 +154,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                 $stmt->bind_param("ssii", $artistId, $date, $monthlyListeners, $followers);
                 $stmt->execute();
                 
-                $logMessage .= "\n✅ Artist stats saved\n";
-                if ($monthlyListeners) $logMessage .= "Monthly Listeners: " . number_format($monthlyListeners) . "\n";
-                if ($followers) $logMessage .= "Followers: " . number_format($followers) . "\n";
+                $statsMsg = "\n✅ Artist stats saved\n";
+                if ($monthlyListeners) $statsMsg .= "Monthly Listeners: " . number_format($monthlyListeners) . "\n";
+                if ($followers) $statsMsg .= "Followers: " . number_format($followers) . "\n";
+                $logMessage .= $statsMsg;
+                if ($useRealTimeLogging) { echo htmlspecialchars($statsMsg); ob_flush(); flush(); }
                 
                 $stmt->close();
                 $conn->close();
             } catch (Exception $e) {
-                $logMessage .= "\n❌ Artist stats error: " . $e->getMessage();
+                $errMsg = "\n❌ Artist stats error: " . $e->getMessage();
+                $logMessage .= $errMsg;
+                if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
             }
+        }
+        
+        // Close real-time logging HTML
+        if ($useRealTimeLogging) {
+            echo '</pre></div></div></div></main></div>';
+            echo '<script>setTimeout(function(){ window.location.href="scrape.php"; }, 3000);</script>';
+            echo '</body></html>';
+            exit;
         }
     }
 }
@@ -203,6 +257,26 @@ $defaultDate = date('Y-m-d', strtotime('-1 day'));
 
             <!-- Scrape Form -->
             <div class="scrape-container">
+                <!-- Instructions Card -->
+                <div class="card" style="margin-bottom: 1rem; background: #FFF3CD; border-left: 4px solid #FFC107;">
+                    <div class="card-body" style="padding: 1rem 1.5rem;">
+                        <h3 style="font-size: 0.9rem; margin-bottom: 0.5rem; color: #856404;">⚠️ How to Fix API 401 Error</h3>
+                        <ol style="font-size: 0.8rem; color: #856404; margin: 0; padding-left: 1.5rem; line-height: 1.6;">
+                            <li>Open <strong>Spotify Web Player</strong> (open.spotify.com) in Chrome/Edge</li>
+                            <li>Press <strong>F12</strong> to open Developer Tools</li>
+                            <li>Go to <strong>Network</strong> tab → Click any song to play</li>
+                            <li>Find request to <code>pathfinder/v1/query</code> or <code>pathfinder/v2/query</code></li>
+                            <li>Click it → Go to <strong>Headers</strong> tab</li>
+                            <li>Copy <strong>client-token</strong> and <strong>authorization</strong> values</li>
+                            <li>Paste them below (tokens expire every ~1 hour)</li>
+                        </ol>
+                        <p style="font-size: 0.75rem; margin: 0.5rem 0 0 0; color: #856404; font-style: italic;">
+                            💡 Real-time logging: Edit scrape.php line 7, change <code>$useRealTimeLogging = false;</code> to <code>true</code> 
+                            (may not work on all servers)
+                        </p>
+                    </div>
+                </div>
+
                 <div class="card">
                     <div class="card-header">
                         <h2>Enter Information</h2>

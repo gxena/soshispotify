@@ -375,6 +375,10 @@ body {
     gap: 1rem;
 }
 
+.tables-grid-4 {
+    grid-template-columns: repeat(4, 1fr);
+}
+
 .table-card {
     background: white;
     border-radius: 14px;
@@ -472,6 +476,20 @@ body {
     gap: 0.6rem;
 }
 
+/* Unit section - 2 columns */
+.units-section .members-list {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+}
+
+/* Solo section - 3 columns */
+.solo-section .members-list {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+}
+
 .member-card {
     background: white;
     border-radius: 14px;
@@ -482,8 +500,9 @@ body {
 
 .member-row {
     display: grid;
-    grid-template-columns: 180px 120px 120px 40px;
+    grid-template-columns: 1fr auto auto 40px;
     align-items: center;
+    gap: 2rem;
     padding: 1.1rem 1.5rem;
     text-decoration: none;
     color: var(--text-primary);
@@ -496,7 +515,7 @@ body {
 
 .member-name {
     font-weight: 600;
-    font-size: 0.95rem;
+    font-size: 1.05rem;
 }
 
 .member-daily {
@@ -504,10 +523,12 @@ body {
     font-weight: 500;
     color: var(--success);
     font-size: 0.9rem;
+    min-width: 100px;
 }
 
 .member-total {
     text-align: right;
+    min-width: 120px;
     font-weight: 600;
     font-size: 0.9rem;
 }

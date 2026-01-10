@@ -62,6 +62,89 @@ function getTotalStreams() {
     }
 }
 
+// Get Girls' Generation daily streams comparison (latest - yesterday)
+function getGGDailyStreamsComparison() {
+    try {
+        $conn = getDBConnection();
+        $ggArtistId = '0Sadg1vgvaPqGTOjxu0N6c';
+        
+        // Get last 3 dates to calculate differences
+        $sql = "SELECT s.stream_date, SUM(s.stream_count) as total
+                FROM streams s
+                JOIN track_artist ta ON s.track_id = ta.track_id
+                WHERE ta.artist_id = ?
+                GROUP BY s.stream_date
+                ORDER BY s.stream_date DESC
+                LIMIT 3";
+        
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("s", $ggArtistId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $dates = [];
+        while ($row = $result->fetch_assoc()) {
+            $dates[] = $row;
+        }
+        
+        $stmt->close();
+        $conn->close();
+        
+        $latest = $dates[0]['total'] ?? 0;
+        $yesterday = $dates[1]['total'] ?? 0;
+        $dayBefore = $dates[2]['total'] ?? 0;
+        
+        return [
+            'current' => $latest - $yesterday,
+            'previous' => $yesterday - $dayBefore,
+            'latest_total' => $latest,
+            'yesterday_total' => $yesterday
+        ];
+    } catch (Exception $e) {
+        return ['current' => 0, 'previous' => 0, 'latest_total' => 0, 'yesterday_total' => 0];
+    }
+}
+
+// Get artist stats comparison (latest vs yesterday)
+function getArtistStatsComparison($artistId = '0Sadg1vgvaPqGTOjxu0N6c') {
+    try {
+        $conn = getDBConnection();
+        $stmt = $conn->prepare("SELECT monthly_listeners, followers, stat_date 
+                               FROM artist_stats 
+                               WHERE artist_id = ? 
+                               ORDER BY stat_date DESC 
+                               LIMIT 2");
+        $stmt->bind_param("s", $artistId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        
+        $dates = [];
+        while ($row = $result->fetch_assoc()) {
+            $dates[] = $row;
+        }
+        
+        $stmt->close();
+        $conn->close();
+        
+        $latest = $dates[0] ?? ['monthly_listeners' => 0, 'followers' => 0];
+        $yesterday = $dates[1] ?? ['monthly_listeners' => 0, 'followers' => 0];
+        
+        return [
+            'monthly_listeners' => $latest['monthly_listeners'],
+            'monthly_listeners_diff' => $latest['monthly_listeners'] - $yesterday['monthly_listeners'],
+            'followers' => $latest['followers'],
+            'followers_diff' => $latest['followers'] - $yesterday['followers']
+        ];
+    } catch (Exception $e) {
+        return [
+            'monthly_listeners' => 0,
+            'monthly_listeners_diff' => 0,
+            'followers' => 0,
+            'followers_diff' => 0
+        ];
+    }
+}
+
 // Get list of all artists for dropdown
 function getArtistList() {
     try {
@@ -86,6 +169,105 @@ function getArtistType($artistName) {
     if (in_array($artistName, $groups)) return 'group';
     if (in_array($artistName, $units)) return 'unit';
     return 'solo';
+}
+
+// Get top tracks by DAILY INCREASE (latest - yesterday)
+function getTopTracksDailyIncrease($limit = 5, $filter = 'all') {
+    try {
+        $conn = getDBConnection();
+        $latestDate = getLatestStreamDate();
+        
+        // Get yesterday's date
+        $stmt = $conn->prepare("SELECT MAX(stream_date) as prev FROM streams WHERE stream_date < ?");
+        $stmt->bind_param("s", $latestDate);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $prevDate = $result->fetch_assoc()['prev'] ?? null;
+        $stmt->close();
+        
+        if (!$prevDate) {
+            return getTopTracksFiltered($latestDate, $limit, $filter);
+        }
+        
+        $sql = "
+            SELECT t.track_name,
+                   COALESCE(s1.stream_count, 0) - COALESCE(s2.stream_count, 0) as daily_increase
+            FROM track t
+            JOIN track_artist ta ON t.track_id = ta.track_id
+            JOIN artist a ON ta.artist_id = a.artist_id
+            LEFT JOIN streams s1 ON t.track_id = s1.track_id AND s1.stream_date = ?
+            LEFT JOIN streams s2 ON t.track_id = s2.track_id AND s2.stream_date = ?
+            WHERE 1=1
+        ";
+        
+        if ($filter == 'group') {
+            $sql .= " AND a.artist_name IN (\"Girls' Generation\", '소녀시대')";
+        } elseif ($filter == 'unit') {
+            $sql .= " AND a.artist_id IN ('7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb')";
+        } elseif ($filter == 'solo') {
+            $sql .= " AND a.artist_id NOT IN ('0Sadg1vgvaPqGTOjxu0N6c', '7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb')";
+        } elseif ($filter != 'all') {
+            $sql .= " AND a.artist_name = '" . $conn->real_escape_string($filter) . "'";
+        }
+        
+        $sql .= " GROUP BY t.track_id HAVING daily_increase > 0 ORDER BY daily_increase DESC LIMIT ?";
+        
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("ssi", $latestDate, $prevDate, $limit);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $tracks = [];
+        while ($row = $result->fetch_assoc()) {
+            $tracks[] = ['track_name' => $row['track_name'], 'plays' => $row['daily_increase']];
+        }
+        $stmt->close();
+        $conn->close();
+        return $tracks;
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+// Get top tracks ALL TIME (cumulative)
+function getTopTracksAllTime($limit = 5, $filter = 'all') {
+    try {
+        $conn = getDBConnection();
+        
+        $sql = "
+            SELECT t.track_name, SUM(s.stream_count) as total_streams
+            FROM track t
+            JOIN track_artist ta ON t.track_id = ta.track_id
+            JOIN artist a ON ta.artist_id = a.artist_id
+            LEFT JOIN streams s ON t.track_id = s.track_id
+            WHERE 1=1
+        ";
+        
+        if ($filter == 'group') {
+            $sql .= " AND a.artist_name IN (\"Girls' Generation\", '소녀시대')";
+        } elseif ($filter == 'unit') {
+            $sql .= " AND a.artist_id IN ('7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb')";
+        } elseif ($filter == 'solo') {
+            $sql .= " AND a.artist_id NOT IN ('0Sadg1vgvaPqGTOjxu0N6c', '7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb')";
+        } elseif ($filter != 'all') {
+            $sql .= " AND a.artist_name = '" . $conn->real_escape_string($filter) . "'";
+        }
+        
+        $sql .= " GROUP BY t.track_id ORDER BY total_streams DESC LIMIT ?";
+        
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("i", $limit);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $tracks = [];
+        while ($row = $result->fetch_assoc()) {
+            $tracks[] = ['track_name' => $row['track_name'], 'plays' => $row['total_streams']];
+        }
+        $stmt->close();
+        $conn->close();
+        return $tracks;
+    } catch (Exception $e) {
+        return [];
+    }
 }
 
 // Get top tracks with filter (all, group, unit, solo, or specific artist)
@@ -126,6 +308,99 @@ function getTopTracksFiltered($date, $limit = 5, $filter = 'all') {
         $stmt->close();
         $conn->close();
         return $tracks;
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+// Get top artists by DAILY INCREASE (latest - yesterday)
+function getTopArtistsDailyIncrease($limit = 5, $filter = 'all') {
+    try {
+        $conn = getDBConnection();
+        $latestDate = getLatestStreamDate();
+        
+        // Get yesterday's date
+        $stmt = $conn->prepare("SELECT MAX(stream_date) as prev FROM streams WHERE stream_date < ?");
+        $stmt->bind_param("s", $latestDate);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $prevDate = $result->fetch_assoc()['prev'] ?? null;
+        $stmt->close();
+        
+        if (!$prevDate) {
+            return getTopArtistsFiltered($latestDate, $limit, $filter);
+        }
+        
+        $sql = "
+            SELECT a.artist_name,
+                   COALESCE(SUM(s1.stream_count), 0) - COALESCE(SUM(s2.stream_count), 0) as daily_increase
+            FROM artist a
+            JOIN track_artist ta ON a.artist_id = ta.artist_id
+            LEFT JOIN streams s1 ON ta.track_id = s1.track_id AND s1.stream_date = ?
+            LEFT JOIN streams s2 ON ta.track_id = s2.track_id AND s2.stream_date = ?
+            WHERE 1=1
+        ";
+        
+        if ($filter == 'group') {
+            $sql .= " AND a.artist_name IN (\"Girls' Generation\", '소녀시대')";
+        } elseif ($filter == 'unit') {
+            $sql .= " AND a.artist_id IN ('7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb')";
+        } elseif ($filter == 'solo') {
+            $sql .= " AND a.artist_id NOT IN ('0Sadg1vgvaPqGTOjxu0N6c', '7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb')";
+        }
+        
+        $sql .= " GROUP BY a.artist_id HAVING daily_increase > 0 ORDER BY daily_increase DESC LIMIT ?";
+        
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("ssi", $latestDate, $prevDate, $limit);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $artists = [];
+        while ($row = $result->fetch_assoc()) {
+            $artists[] = ['artist_name' => $row['artist_name'], 'total_streams' => $row['daily_increase']];
+        }
+        $stmt->close();
+        $conn->close();
+        return $artists;
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+// Get top artists ALL TIME (cumulative)
+function getTopArtistsAllTime($limit = 5, $filter = 'all') {
+    try {
+        $conn = getDBConnection();
+        
+        $sql = "
+            SELECT a.artist_name, SUM(s.stream_count) as total_streams
+            FROM artist a
+            JOIN track_artist ta ON a.artist_id = ta.artist_id
+            LEFT JOIN streams s ON ta.track_id = s.track_id
+            WHERE 1=1
+        ";
+        
+        if ($filter == 'group') {
+            $sql .= " AND a.artist_name IN (\"Girls' Generation\", '소녀시대')";
+        } elseif ($filter == 'unit') {
+            $sql .= " AND a.artist_id IN ('7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb')";
+        } elseif ($filter == 'solo') {
+            $sql .= " AND a.artist_id NOT IN ('0Sadg1vgvaPqGTOjxu0N6c', '7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb')";
+        }
+        
+        $sql .= " GROUP BY a.artist_id ORDER BY total_streams DESC LIMIT ?";
+        
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("i", $limit);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $artists = [];
+        while ($row = $result->fetch_assoc()) {
+            $artists[] = ['artist_name' => $row['artist_name'], 'total_streams' => $row['total_streams']];
+        }
+        $stmt->close();
+        $conn->close();
+        return $artists;
     } catch (Exception $e) {
         return [];
     }
@@ -225,7 +500,7 @@ function getArtists() {
     }
 }
 
-// Get daily streams for chart (last 7 days)
+// Get daily streams for chart - showing daily INCREASES (difference from previous day)
 function getDailyStreamsChart($days = 7) {
     try {
         $conn = getDBConnection();
@@ -242,10 +517,20 @@ function getDailyStreamsChart($days = 7) {
         
         $labels = [];
         $data = [];
+        $rawData = [];
         
         while ($row = $result->fetch_assoc()) {
             $labels[] = date('j/n', strtotime($row['stream_date']));
-            $data[] = $row['total'];
+            $rawData[] = $row['total'];
+        }
+        
+        // Calculate daily increases (today - yesterday)
+        for ($i = 0; $i < count($rawData); $i++) {
+            if ($i == 0) {
+                $data[] = $rawData[$i]; // First day shows total
+            } else {
+                $data[] = $rawData[$i] - $rawData[$i - 1]; // Daily increase
+            }
         }
         
         $stmt->close();

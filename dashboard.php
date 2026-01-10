@@ -6,61 +6,61 @@ require_once 'api_helper.php';
 $latestDate = getLatestStreamDate();
 if (!$latestDate) $latestDate = date('Y-m-d');
 
-// Get real data from database
-$artistStats = getLatestArtistStats('0Sadg1vgvaPqGTOjxu0N6c');
-$totalStreams = getTotalStreams();
-$dailyStreams = getTodayTotalStreams($latestDate);
-$monthlyListeners = $artistStats['monthly_listeners'] ?? 0;
-$followers = $artistStats['followers'] ?? 0;
+// Get GG daily streams comparison
+$ggDaily = getGGDailyStreamsComparison();
+$dailyStreams = $ggDaily['current'];
+$dailyStreamsPrev = $ggDaily['previous'];
 
-// If no data yet, use realistic dummy data
-if ($totalStreams == 0) $totalStreams = 1230050248;
-if ($dailyStreams == 0) $dailyStreams = 15302293;
-if ($monthlyListeners == 0) $monthlyListeners = 4289000;
-if ($followers == 0) $followers = 2040190;
+// Get artist stats comparison
+$statsComparison = getArtistStatsComparison('0Sadg1vgvaPqGTOjxu0N6c');
+$monthlyListeners = $statsComparison['monthly_listeners'];
+$monthlyListenersDiff = $statsComparison['monthly_listeners_diff'];
+$followers = $statsComparison['followers'];
+$followersDiff = $statsComparison['followers_diff'];
+
+// Get total streams
+$totalStreams = getTotalStreams();
 
 // Get filter from URL
 $filter = $_GET['filter'] ?? 'all';
 
-// Get top 5 tracks from database with filter
-$topTracksData = getTopTracksFiltered($latestDate, 5, $filter);
+// Get top 5 tracks DAILY INCREASE
+$topTracksDaily = getTopTracksDailyIncrease(5, $filter);
 $topTracks = [];
-foreach ($topTracksData as $track) {
+foreach ($topTracksDaily as $track) {
     $topTracks[] = [
         'name' => $track['track_name'],
         'plays' => $track['plays']
     ];
 }
 
-// Fallback dummy data
-if (empty($topTracks)) {
-    $topTracks = [
-        ['name' => 'Gee', 'plays' => 600000],
-        ['name' => 'The Boys KOR', 'plays' => 400000],
-        ['name' => 'Genie', 'plays' => 386000],
-        ['name' => 'Into The New World', 'plays' => 350000],
-        ['name' => 'I Got A Boy', 'plays' => 320000]
+// Get top 5 tracks ALL TIME
+$topTracksAllTime = getTopTracksAllTime(5, $filter);
+$topTracksAll = [];
+foreach ($topTracksAllTime as $track) {
+    $topTracksAll[] = [
+        'name' => $track['track_name'],
+        'plays' => $track['plays']
     ];
 }
 
-// Get top 5 artists from database
-$topArtistsData = getTopArtistsFiltered($latestDate, 5, $filter);
+// Get top 5 artists DAILY INCREASE
+$topArtistsDaily = getTopArtistsDailyIncrease(5, $filter);
 $topArtists = [];
-foreach ($topArtistsData as $artist) {
+foreach ($topArtistsDaily as $artist) {
     $topArtists[] = [
         'name' => $artist['artist_name'],
         'plays' => $artist['total_streams']
     ];
 }
 
-// Fallback dummy data for artists
-if (empty($topArtists)) {
-    $topArtists = [
-        ['name' => "Girls' Generation", 'plays' => 15200000],
-        ['name' => 'TAEYEON', 'plays' => 9400000],
-        ['name' => 'HYOYEON', 'plays' => 1386000],
-        ['name' => 'Tiffany Young', 'plays' => 1200000],
-        ['name' => 'YOONA', 'plays' => 900000]
+// Get top 5 artists ALL TIME
+$topArtistsAllTime = getTopArtistsAllTime(5, $filter);
+$topArtistsAll = [];
+foreach ($topArtistsAllTime as $artist) {
+    $topArtistsAll[] = [
+        'name' => $artist['artist_name'],
+        'plays' => $artist['total_streams']
     ];
 }
 
@@ -144,10 +144,11 @@ $displayDate = date('d M Y', strtotime($latestDate));
 
                 <div class="stat-card">
                     <div class="stat-info">
-                        <h4>Daily Streams</h4>
+                        <h4>Daily Streams (GG)</h4>
                         <h2><?php echo number_format($dailyStreams); ?></h2>
-                        <span class="stat-change positive">
-                            <i class="fas fa-arrow-up"></i> 1.3% Up from past week
+                        <span class="stat-change <?php echo $dailyStreamsPrev >= 0 ? 'positive' : 'negative'; ?>">
+                            <i class="fas fa-arrow-<?php echo $dailyStreamsPrev >= 0 ? 'up' : 'down'; ?>"></i> 
+                            <?php echo ($dailyStreamsPrev >= 0 ? '+' : '') . number_format($dailyStreamsPrev); ?> from yesterday
                         </span>
                     </div>
                     <div class="stat-icon yellow">
@@ -159,8 +160,9 @@ $displayDate = date('d M Y', strtotime($latestDate));
                     <div class="stat-info">
                         <h4>Monthly Listeners</h4>
                         <h2><?php echo number_format($monthlyListeners); ?></h2>
-                        <span class="stat-change negative">
-                            <i class="fas fa-arrow-down"></i> 4.3% Down from yesterday
+                        <span class="stat-change <?php echo $monthlyListenersDiff >= 0 ? 'positive' : 'negative'; ?>">
+                            <i class="fas fa-arrow-<?php echo $monthlyListenersDiff >= 0 ? 'up' : 'down'; ?>"></i> 
+                            <?php echo ($monthlyListenersDiff >= 0 ? '+' : '') . number_format($monthlyListenersDiff); ?> from yesterday
                         </span>
                     </div>
                     <div class="stat-icon green">
@@ -172,8 +174,9 @@ $displayDate = date('d M Y', strtotime($latestDate));
                     <div class="stat-info">
                         <h4>Followers</h4>
                         <h2><?php echo number_format($followers); ?></h2>
-                        <span class="stat-change positive">
-                            <i class="fas fa-arrow-up"></i> +599 from yesterday
+                        <span class="stat-change <?php echo $followersDiff >= 0 ? 'positive' : 'negative'; ?>">
+                            <i class="fas fa-arrow-<?php echo $followersDiff >= 0 ? 'up' : 'down'; ?>"></i> 
+                            <?php echo ($followersDiff >= 0 ? '+' : '') . number_format($followersDiff); ?> from yesterday
                         </span>
                     </div>
                     <div class="stat-icon red">
@@ -198,7 +201,7 @@ $displayDate = date('d M Y', strtotime($latestDate));
             </div>
 
             <!-- Bottom Tables -->
-            <div class="tables-grid">
+            <div class="tables-grid tables-grid-4">
                 <!-- Top Daily Song -->
                 <div class="table-card">
                     <div class="table-header">
@@ -216,7 +219,7 @@ $displayDate = date('d M Y', strtotime($latestDate));
                     <div class="data-table">
                         <div class="table-head">
                             <span>Song</span>
-                            <span>Streams</span>
+                            <span>Increase</span>
                         </div>
                         <?php foreach ($topTracks as $track): ?>
                         <div class="table-row">
@@ -241,9 +244,62 @@ $displayDate = date('d M Y', strtotime($latestDate));
                     <div class="data-table">
                         <div class="table-head">
                             <span>Artist</span>
-                            <span>Streams</span>
+                            <span>Increase</span>
                         </div>
                         <?php foreach ($topArtists as $artist): ?>
+                        <div class="table-row">
+                            <span class="song-name"><?php echo htmlspecialchars($artist['name']); ?></span>
+                            <span class="streams"><?php echo number_format($artist['plays']); ?></span>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <!-- Top All-Time Song -->
+                <div class="table-card">
+                    <div class="table-header">
+                        <h3>Top All-Time Song</h3>
+                        <select onchange="location.href='dashboard.php?filter='+this.value">
+                            <option value="all" <?php echo $filter=='all'?'selected':''; ?>>All</option>
+                            <option value="group" <?php echo $filter=='group'?'selected':''; ?>>Group</option>
+                            <option value="unit" <?php echo $filter=='unit'?'selected':''; ?>>Unit</option>
+                            <option value="solo" <?php echo $filter=='solo'?'selected':''; ?>>Solo</option>
+                            <?php foreach ($individualArtists as $artist): ?>
+                            <option value="<?php echo urlencode($artist['artist_name']); ?>" <?php echo $filter==$artist['artist_name']?'selected':''; ?>><?php echo htmlspecialchars($artist['artist_name']); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="data-table">
+                        <div class="table-head">
+                            <span>Song</span>
+                            <span>Total</span>
+                        </div>
+                        <?php foreach ($topTracksAll as $track): ?>
+                        <div class="table-row">
+                            <span class="song-name"><?php echo htmlspecialchars($track['name']); ?></span>
+                            <span class="streams"><?php echo number_format($track['plays']); ?></span>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <!-- Top All-Time Artist -->
+                <div class="table-card">
+                    <div class="table-header">
+                        <h3>Top All-Time Artist</h3>
+                        <select onchange="location.href='dashboard.php?filter='+this.value">
+                            <option value="all" <?php echo $filter=='all'?'selected':''; ?>>All</option>
+                            <option value="group" <?php echo $filter=='group'?'selected':''; ?>>Group</option>
+                            <option value="unit" <?php echo $filter=='unit'?'selected':''; ?>>Unit</option>
+                            <option value="solo" <?php echo $filter=='solo'?'selected':''; ?>>Solo</option>
+                        </select>
+                    </div>
+                    <div class="data-table">
+                        <div class="table-head">
+                            <span>Artist</span>
+                            <span>Total</span>
+                        </div>
+                        <?php foreach ($topArtistsAll as $artist): ?>
                         <div class="table-row">
                             <span class="song-name"><?php echo htmlspecialchars($artist['name']); ?></span>
                             <span class="streams"><?php echo number_format($artist['plays']); ?></span>

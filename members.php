@@ -166,9 +166,9 @@ if ($selectedArtist && isset($artistGroups[$selectedArtist])) {
                 </div>
 
                 <!-- Unit Section -->
-                <div class="members-section">
+                <div class="members-section units-section">
                     <h2 class="section-title">Units</h2>
-                    <?php foreach ($artistsData as $key => $artist): ?>
+                    <div class="members-list"><?php foreach ($artistsData as $key => $artist): ?>
                         <?php if ($artist['type'] === 'unit'): ?>
                         <div class="member-card <?php echo ($selectedArtist === $key) ? 'expanded' : ''; ?>">
                             <a href="members.php?artist=<?php echo urlencode($key); ?>" class="member-row">
@@ -192,12 +192,13 @@ if ($selectedArtist && isset($artistGroups[$selectedArtist])) {
                         </div>
                         <?php endif; ?>
                     <?php endforeach; ?>
+                    </div>
                 </div>
 
                 <!-- Solo Section -->
-                <div class="members-section">
+                <div class="members-section solo-section">
                     <h2 class="section-title">Solo</h2>
-                    <?php foreach ($artistsData as $key => $artist): ?>
+                    <div class="members-list"><?php foreach ($artistsData as $key => $artist): ?>
                         <?php if ($artist['type'] === 'solo'): ?>
                         <div class="member-card <?php echo ($selectedArtist === $key) ? 'expanded' : ''; ?>">
                             <a href="members.php?artist=<?php echo urlencode($key); ?>" class="member-row">
@@ -221,6 +222,7 @@ if ($selectedArtist && isset($artistGroups[$selectedArtist])) {
                         </div>
                         <?php endif; ?>
                     <?php endforeach; ?>
+                    </div>
                 </div>
             </div>
         </main>

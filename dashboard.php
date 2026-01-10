@@ -6,23 +6,26 @@ require_once 'api_helper.php';
 $latestDate = getLatestStreamDate();
 if (!$latestDate) $latestDate = date('Y-m-d');
 
-// Get GG daily streams comparison
-$ggDaily = getGGDailyStreamsComparison();
-$dailyStreams = $ggDaily['current'];
-$dailyStreamsPrev = $ggDaily['previous'];
+// Get filter from URL
+$filter = $_GET['filter'] ?? '0Sadg1vgvaPqGTOjxu0N6c'; // Default to Girls' Generation artist_id
 
-// Get artist stats comparison
-$statsComparison = getArtistStatsComparison('0Sadg1vgvaPqGTOjxu0N6c');
+// Get stats based on filter
+$dailyComparison = getDailyStreamsComparisonByFilter($filter);
+$dailyStreams = $dailyComparison['current'];
+$dailyStreamsPrev = $dailyComparison['previous'];
+
+// Get artist stats comparison (ML and Followers)
+$statsComparison = getArtistStatsComparisonByFilter($filter);
 $monthlyListeners = $statsComparison['monthly_listeners'];
 $monthlyListenersDiff = $statsComparison['monthly_listeners_diff'];
 $followers = $statsComparison['followers'];
 $followersDiff = $statsComparison['followers_diff'];
 
 // Get total streams
-$totalStreams = getTotalStreams();
+$totalStreams = getTotalStreamsByFilter($filter);
 
 // Get filter from URL
-$filter = $_GET['filter'] ?? 'all';
+$filter = $_GET['filter'] ?? '0Sadg1vgvaPqGTOjxu0N6c'; // Default to Girls' Generation artist_id
 
 // Get top 5 tracks DAILY INCREASE
 $topTracksDaily = getTopTracksDailyIncrease(5, $filter);
@@ -65,7 +68,7 @@ foreach ($topArtistsAllTime as $artist) {
 }
 
 // Get chart data for current month
-$chartData = getDailyStreamsChart(31);
+$chartData = getDailyStreamsChart(31, $filter);
 if (empty($chartData['data'])) {
     // Generate dummy data
     $labels = [];
@@ -77,16 +80,8 @@ if (empty($chartData['data'])) {
     $chartData = ['labels' => $labels, 'data' => $data];
 }
 
-// Artist categories for filter
-$artistCategories = [
-    'all' => 'All',
-    'group' => 'Group',
-    'unit' => 'Unit', 
-    'solo' => 'Solo'
-];
-
-// Individual artists for filter
-$individualArtists = getArtistList();
+// Get all artists for filter dropdown
+$allArtists = getArtistList();
 
 $currentMonth = date('F Y');
 $displayDate = date('d M Y', strtotime($latestDate));
@@ -127,6 +122,29 @@ $displayDate = date('d M Y', strtotime($latestDate));
             <header class="topbar">
                 <div class="topbar-left">
                     <h1>Dashboard (<?php echo $displayDate; ?>)</h1>
+                </div>
+                <div class="topbar-right">
+                    <select class="filter-dropdown" onchange="location.href='dashboard.php?filter='+this.value">
+                        <option value="0Sadg1vgvaPqGTOjxu0N6c" <?php echo $filter=='0Sadg1vgvaPqGTOjxu0N6c'?'selected':''; ?>>Girls' Generation</option>
+                        <option value="groups" <?php echo $filter=='groups'?'selected':''; ?>>Groups (GG + Subunits)</option>
+                        <option value="solo" <?php echo $filter=='solo'?'selected':''; ?>>Solo (All Members)</option>
+                        <optgroup label="Subunits">
+                            <option value="7AKHnZVqwXYuUwWJ8UGL5q" <?php echo $filter=='7AKHnZVqwXYuUwWJ8UGL5q'?'selected':''; ?>>Girls' Generation-TTS</option>
+                            <option value="1foL9hLC9M6U94dINtOYfb" <?php echo $filter=='1foL9hLC9M6U94dINtOYfb'?'selected':''; ?>>Girls' Generation-Oh!GG</option>
+                        </optgroup>
+                        <optgroup label="Solo Members">
+                            <?php 
+                            $subunitIds = ['0Sadg1vgvaPqGTOjxu0N6c', '7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb'];
+                            foreach ($allArtists as $artist): 
+                                if (!in_array($artist['artist_id'], $subunitIds)):
+                            ?>
+                            <option value="<?php echo $artist['artist_id']; ?>" <?php echo $filter==$artist['artist_id']?'selected':''; ?>><?php echo htmlspecialchars($artist['artist_name']); ?></option>
+                            <?php 
+                                endif;
+                            endforeach; 
+                            ?>
+                        </optgroup>
+                    </select>
                 </div>
             </header>
 
@@ -206,15 +224,6 @@ $displayDate = date('d M Y', strtotime($latestDate));
                 <div class="table-card">
                     <div class="table-header">
                         <h3>Top Daily Song</h3>
-                        <select onchange="location.href='dashboard.php?filter='+this.value">
-                            <option value="all" <?php echo $filter=='all'?'selected':''; ?>>All</option>
-                            <option value="group" <?php echo $filter=='group'?'selected':''; ?>>Group</option>
-                            <option value="unit" <?php echo $filter=='unit'?'selected':''; ?>>Unit</option>
-                            <option value="solo" <?php echo $filter=='solo'?'selected':''; ?>>Solo</option>
-                            <?php foreach ($individualArtists as $artist): ?>
-                            <option value="<?php echo urlencode($artist['artist_name']); ?>" <?php echo $filter==$artist['artist_name']?'selected':''; ?>><?php echo htmlspecialchars($artist['artist_name']); ?></option>
-                            <?php endforeach; ?>
-                        </select>
                     </div>
                     <div class="data-table">
                         <div class="table-head">
@@ -230,44 +239,10 @@ $displayDate = date('d M Y', strtotime($latestDate));
                     </div>
                 </div>
 
-                <!-- Top Daily Artist -->
-                <div class="table-card">
-                    <div class="table-header">
-                        <h3>Top Daily Artist</h3>
-                        <select onchange="location.href='dashboard.php?filter='+this.value">
-                            <option value="all" <?php echo $filter=='all'?'selected':''; ?>>All</option>
-                            <option value="group" <?php echo $filter=='group'?'selected':''; ?>>Group</option>
-                            <option value="unit" <?php echo $filter=='unit'?'selected':''; ?>>Unit</option>
-                            <option value="solo" <?php echo $filter=='solo'?'selected':''; ?>>Solo</option>
-                        </select>
-                    </div>
-                    <div class="data-table">
-                        <div class="table-head">
-                            <span>Artist</span>
-                            <span>Increase</span>
-                        </div>
-                        <?php foreach ($topArtists as $artist): ?>
-                        <div class="table-row">
-                            <span class="song-name"><?php echo htmlspecialchars($artist['name']); ?></span>
-                            <span class="streams"><?php echo number_format($artist['plays']); ?></span>
-                        </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-
                 <!-- Top All-Time Song -->
                 <div class="table-card">
                     <div class="table-header">
                         <h3>Top All-Time Song</h3>
-                        <select onchange="location.href='dashboard.php?filter='+this.value">
-                            <option value="all" <?php echo $filter=='all'?'selected':''; ?>>All</option>
-                            <option value="group" <?php echo $filter=='group'?'selected':''; ?>>Group</option>
-                            <option value="unit" <?php echo $filter=='unit'?'selected':''; ?>>Unit</option>
-                            <option value="solo" <?php echo $filter=='solo'?'selected':''; ?>>Solo</option>
-                            <?php foreach ($individualArtists as $artist): ?>
-                            <option value="<?php echo urlencode($artist['artist_name']); ?>" <?php echo $filter==$artist['artist_name']?'selected':''; ?>><?php echo htmlspecialchars($artist['artist_name']); ?></option>
-                            <?php endforeach; ?>
-                        </select>
                     </div>
                     <div class="data-table">
                         <div class="table-head">
@@ -283,16 +258,29 @@ $displayDate = date('d M Y', strtotime($latestDate));
                     </div>
                 </div>
 
+                <!-- Top Daily Artist -->
+                <div class="table-card">
+                    <div class="table-header">
+                        <h3>Top Daily Artist</h3>
+                    </div>
+                    <div class="data-table">
+                        <div class="table-head">
+                            <span>Artist</span>
+                            <span>Increase</span>
+                        </div>
+                        <?php foreach ($topArtists as $artist): ?>
+                        <div class="table-row">
+                            <span class="song-name"><?php echo htmlspecialchars($artist['name']); ?></span>
+                            <span class="streams"><?php echo number_format($artist['plays']); ?></span>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
                 <!-- Top All-Time Artist -->
                 <div class="table-card">
                     <div class="table-header">
                         <h3>Top All-Time Artist</h3>
-                        <select onchange="location.href='dashboard.php?filter='+this.value">
-                            <option value="all" <?php echo $filter=='all'?'selected':''; ?>>All</option>
-                            <option value="group" <?php echo $filter=='group'?'selected':''; ?>>Group</option>
-                            <option value="unit" <?php echo $filter=='unit'?'selected':''; ?>>Unit</option>
-                            <option value="solo" <?php echo $filter=='solo'?'selected':''; ?>>Solo</option>
-                        </select>
                     </div>
                     <div class="data-table">
                         <div class="table-head">

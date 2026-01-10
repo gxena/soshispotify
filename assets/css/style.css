@@ -160,6 +160,24 @@ body {
     gap: 1rem;
 }
 
+.filter-dropdown {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: 1px solid #E5E7EB;
+    font-size: 0.85rem;
+    font-family: 'Poppins', sans-serif;
+    cursor: pointer;
+    background: white;
+    color: var(--text-primary);
+    font-weight: 500;
+    min-width: 200px;
+}
+
+.filter-dropdown:focus {
+    outline: none;
+    border-color: var(--primary-pink);
+}
+
 .search-box {
     display: flex;
     align-items: center;

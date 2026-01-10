@@ -1,17 +1,18 @@
 <?php 
+session_start();
 require_once 'config.php';
 require_once 'api_helper.php';
 
 // Handle form submission
-$logMessage = '';
+$logMessage = $_SESSION['last_log'] ?? '';
 $useRealTimeLogging = true; // Set to true for real-time logging
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
     $date = $_POST['date'] ?? date('Y-m-d', strtotime('-1 day'));
     $clientToken = $_POST['client_token'] ?? '';
     $authBearer = $_POST['auth_bearer'] ?? '';
-    $monthlyListeners = $_POST['monthly_listeners'] ?? '';
-    $followers = $_POST['followers'] ?? '';
+    $getStreams = isset($_POST['get_streams']);
+    $getStats = isset($_POST['get_stats']);
     
     if (empty($clientToken) || empty($authBearer)) {
         $logMessage = "ERROR: Client Token and Authorization Bearer are required!";
@@ -54,10 +55,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
             "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
         ];
         
-        // Get all tracks from track table
-        $tracks = getAllTracksFromDB();
         $successCount = 0;
         $errorCount = 0;
+        
+        // Get Streams
+        if ($getStreams) {
+            // Get all tracks from track table
+            $tracks = getAllTracksFromDB();
         
         if (empty($tracks)) {
             $logMessage .= "No tracks found in database. Please add tracks first.\n";
@@ -138,43 +142,135 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
             }
         }
         
-        $summary = "\n=== Summary ===\n";
-        $summary .= "✅ Success: " . $successCount . " tracks\n";
-        $summary .= "❌ Errors: " . $errorCount . " tracks\n";
-        $logMessage .= $summary;
-        if ($useRealTimeLogging) { echo htmlspecialchars($summary); ob_flush(); flush(); }
+            $summary = "\n=== Streams Summary ===\n";
+            $summary .= "✅ Success: " . $successCount . " tracks\n";
+            $summary .= "❌ Errors: " . $errorCount . " tracks\n";
+            $logMessage .= $summary;
+            if ($useRealTimeLogging) { echo htmlspecialchars($summary); ob_flush(); flush(); }
+        }
         
-        // Save artist stats if provided
-        if (!empty($monthlyListeners) || !empty($followers)) {
-            try {
-                $conn = getDBConnection();
-                $artistId = '0Sadg1vgvaPqGTOjxu0N6c'; // Girls' Generation artist ID
-                
-                $stmt = $conn->prepare("INSERT INTO artist_stats (artist_id, stat_date, monthly_listeners, followers) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE monthly_listeners = VALUES(monthly_listeners), followers = VALUES(followers)");
-                $stmt->bind_param("ssii", $artistId, $date, $monthlyListeners, $followers);
-                $stmt->execute();
-                
-                $statsMsg = "\n✅ Artist stats saved\n";
-                if ($monthlyListeners) $statsMsg .= "Monthly Listeners: " . number_format($monthlyListeners) . "\n";
-                if ($followers) $statsMsg .= "Followers: " . number_format($followers) . "\n";
-                $logMessage .= $statsMsg;
-                if ($useRealTimeLogging) { echo htmlspecialchars($statsMsg); ob_flush(); flush(); }
-                
-                $stmt->close();
-                $conn->close();
-            } catch (Exception $e) {
-                $errMsg = "\n❌ Artist stats error: " . $e->getMessage();
+        // Get Monthly Listeners & Followers
+        if ($getStats) {
+            $statsMsg = "\n=== Getting Artist Stats ===\n";
+            $logMessage .= $statsMsg;
+            if ($useRealTimeLogging) { echo htmlspecialchars($statsMsg); ob_flush(); flush(); }
+            
+            // Get all artists from database
+            $artists = getArtistList();
+            
+            if (empty($artists)) {
+                $errMsg = "⚠️ No artists found in database\n";
                 $logMessage .= $errMsg;
                 if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
+            } else {
+                $statsSuccessCount = 0;
+                $statsErrorCount = 0;
+                
+                foreach ($artists as $artist) {
+                    $artistId = $artist['artist_id'];
+                    $artistName = $artist['artist_name'];
+                    
+                    try {
+                        // Build GraphQL query for Artist Overview
+                        $graphqlQuery = [
+                            "operationName" => "queryArtistOverview",
+                            "variables" => [
+                                "uri" => "spotify:artist:" . $artistId,
+                                "locale" => "intl-id"
+                            ],
+                            "extensions" => [
+                                "persistedQuery" => [
+                                    "version" => 1,
+                                    "sha256Hash" => "446130b4a0aa6522a686aafccddb0ae849165b5e0436fd802f96e0243617b5d8"
+                                ]
+                            ]
+                        ];
+                        
+                        // Make cURL request
+                        $ch = curl_init();
+                        curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v2/query");
+                        curl_setopt($ch, CURLOPT_POST, true);
+                        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($graphqlQuery));
+                        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+                        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+                        
+                        $response = curl_exec($ch);
+                        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                        curl_close($ch);
+                        
+                        if ($httpCode == 200 && $response) {
+                            $data = json_decode($response, true);
+                            
+                            // Extract stats
+                            $monthlyListeners = 0;
+                            $followers = 0;
+                            
+                            if (isset($data['data']['artistUnion']['stats'])) {
+                                $stats = $data['data']['artistUnion']['stats'];
+                                $monthlyListeners = $stats['monthlyListeners'] ?? 0;
+                                $followers = $stats['followers'] ?? 0;
+                            }
+                            
+                            if ($monthlyListeners > 0 || $followers > 0) {
+                                $conn = getDBConnection();
+                                $stmt = $conn->prepare("INSERT INTO artist_stats (artist_id, stat_date, monthly_listeners, followers) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE monthly_listeners = VALUES(monthly_listeners), followers = VALUES(followers)");
+                                $stmt->bind_param("ssii", $artistId, $date, $monthlyListeners, $followers);
+                                $stmt->execute();
+                                
+                                $statsMsg = "✅ " . $artistName . " -> ML: " . number_format($monthlyListeners) . ", Followers: " . number_format($followers) . "\n";
+                                $logMessage .= $statsMsg;
+                                if ($useRealTimeLogging) { echo htmlspecialchars($statsMsg); ob_flush(); flush(); }
+                                
+                                $stmt->close();
+                                $conn->close();
+                                $statsSuccessCount++;
+                            } else {
+                                $errMsg = "⚠️ " . $artistName . " -> No stats data\n";
+                                $logMessage .= $errMsg;
+                                if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
+                                $statsErrorCount++;
+                            }
+                        } else {
+                            $errMsg = "❌ " . $artistName . " -> API Error (HTTP " . $httpCode . ")\n";
+                            if ($httpCode == 401) {
+                                $errMsg .= "   → Token expired! Get new tokens from Spotify Web Player\n";
+                            }
+                            $logMessage .= $errMsg;
+                            if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
+                            $statsErrorCount++;
+                        }
+                        
+                        usleep(100000); // 100ms delay between artists
+                        
+                    } catch (Exception $e) {
+                        $errMsg = "❌ " . $artistName . " -> Error: " . $e->getMessage() . "\n";
+                        $logMessage .= $errMsg;
+                        if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
+                        $statsErrorCount++;
+                    }
+                }
+                
+                $statsSummary = "\n=== Stats Summary ===\n";
+                $statsSummary .= "✅ Success: " . $statsSuccessCount . " artists\n";
+                $statsSummary .= "❌ Errors: " . $statsErrorCount . " artists\n";
+                $logMessage .= $statsSummary;
+                if ($useRealTimeLogging) { echo htmlspecialchars($statsSummary); ob_flush(); flush(); }
             }
         }
         
         // Close real-time logging HTML
         if ($useRealTimeLogging) {
+            // Save log to session for display after redirect
+            $_SESSION['last_log'] = $logMessage;
             echo '</pre></div></div></div></main></div>';
             echo '<script>setTimeout(function(){ window.location.href="scrape.php"; }, 3000);</script>';
             echo '</body></html>';
             exit;
+        } else {
+            // Save log to session for non-realtime mode
+            $_SESSION['last_log'] = $logMessage;
         }
     }
 }
@@ -257,26 +353,6 @@ $defaultDate = date('Y-m-d', strtotime('-1 day'));
 
             <!-- Scrape Form -->
             <div class="scrape-container">
-                <!-- Instructions Card -->
-                <div class="card" style="margin-bottom: 1rem; background: #FFF3CD; border-left: 4px solid #FFC107;">
-                    <div class="card-body" style="padding: 1rem 1.5rem;">
-                        <h3 style="font-size: 0.9rem; margin-bottom: 0.5rem; color: #856404;">⚠️ How to Fix API 401 Error</h3>
-                        <ol style="font-size: 0.8rem; color: #856404; margin: 0; padding-left: 1.5rem; line-height: 1.6;">
-                            <li>Open <strong>Spotify Web Player</strong> (open.spotify.com) in Chrome/Edge</li>
-                            <li>Press <strong>F12</strong> to open Developer Tools</li>
-                            <li>Go to <strong>Network</strong> tab → Click any song to play</li>
-                            <li>Find request to <code>pathfinder/v1/query</code> or <code>pathfinder/v2/query</code></li>
-                            <li>Click it → Go to <strong>Headers</strong> tab</li>
-                            <li>Copy <strong>client-token</strong> and <strong>authorization</strong> values</li>
-                            <li>Paste them below (tokens expire every ~1 hour)</li>
-                        </ol>
-                        <p style="font-size: 0.75rem; margin: 0.5rem 0 0 0; color: #856404; font-style: italic;">
-                            💡 Real-time logging: Edit scrape.php line 7, change <code>$useRealTimeLogging = false;</code> to <code>true</code> 
-                            (may not work on all servers)
-                        </p>
-                    </div>
-                </div>
-
                 <div class="card">
                     <div class="card-header">
                         <h2>Enter Information</h2>
@@ -310,30 +386,26 @@ $defaultDate = date('Y-m-d', strtotime('-1 day'));
                                 </div>
 
                                 <div class="form-row">
-                                    <label class="form-label">Monthly Listeners</label>
-                                    <input type="number" 
-                                           name="monthly_listeners" 
-                                           class="form-input" 
-                                           placeholder="Enter here..."
-                                           value="<?php echo isset($_POST['monthly_listeners']) ? htmlspecialchars($_POST['monthly_listeners']) : ''; ?>">
-                                </div>
-
-                                <div class="form-row">
-                                    <label class="form-label">Followers</label>
-                                    <input type="number" 
-                                           name="followers" 
-                                           class="form-input" 
-                                           placeholder="Enter here..."
-                                           value="<?php echo isset($_POST['followers']) ? htmlspecialchars($_POST['followers']) : ''; ?>">
-                                </div>
-
-                                <div class="form-row">
                                     <label class="form-label">Date</label>
                                     <input type="date" 
                                            name="date" 
                                            class="form-input" 
                                            value="<?php echo $defaultDate; ?>"
                                            required>
+                                </div>
+                                
+                                <div class="form-row">
+                                    <label class="form-label">Options</label>
+                                    <div style="display: flex; gap: 1.5rem;">
+                                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; cursor: pointer;">
+                                            <input type="checkbox" name="get_streams" checked style="cursor: pointer;">
+                                            Get Streams
+                                        </label>
+                                        <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; cursor: pointer;">
+                                            <input type="checkbox" name="get_stats" checked style="cursor: pointer;">
+                                            Get Monthly Listeners & Followers
+                                        </label>
+                                    </div>
                                 </div>
                             </div>
                             

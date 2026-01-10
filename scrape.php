@@ -1,0 +1,294 @@
+<?php 
+require_once 'config.php';
+require_once 'api_helper.php';
+
+// Handle form submission
+$logMessage = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
+    $date = $_POST['date'] ?? date('Y-m-d', strtotime('-1 day'));
+    $clientToken = $_POST['client_token'] ?? '';
+    $authBearer = $_POST['auth_bearer'] ?? '';
+    $monthlyListeners = $_POST['monthly_listeners'] ?? '';
+    $followers = $_POST['followers'] ?? '';
+    
+    if (empty($clientToken) || empty($authBearer)) {
+        $logMessage = "ERROR: Client Token and Authorization Bearer are required!";
+    } else {
+        $logMessage = "=== Scraping Data from Spotify ===\n";
+        $logMessage .= "Date: " . $date . "\n\n";
+        
+        // Prepare headers
+        $headers = [
+            "authorization: Bearer " . $authBearer,
+            "client-token: " . $clientToken,
+            "content-type: application/json;charset=UTF-8",
+            "origin: https://open.spotify.com",
+            "referer: https://open.spotify.com/",
+            "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+        ];
+        
+        // Get all tracks from track table
+        $tracks = getAllTracksFromDB();
+        $successCount = 0;
+        $errorCount = 0;
+        
+        if (empty($tracks)) {
+            $logMessage .= "No tracks found in database. Please add tracks first.\n";
+        } else {
+            foreach ($tracks as $track) {
+                $trackId = $track['track_id'];
+                $trackName = $track['track_name'];
+                
+                // Build GraphQL query for Spotify API
+                $graphqlQuery = [
+                    "operationName" => "getTrack",
+                    "variables" => [
+                        "uri" => "spotify:track:" . $trackId
+                    ],
+                    "extensions" => [
+                        "persistedQuery" => [
+                            "version" => 1,
+                            "sha256Hash" => "e101aead6d78faa11571f895fc425186d6ad255f2b1f41a2f8feeacd4f6a6b9b"
+                        ]
+                    ]
+                ];
+                
+                // Make cURL request
+                $ch = curl_init();
+                curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v1/query");
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($graphqlQuery));
+                curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+                
+                $response = curl_exec($ch);
+                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                curl_close($ch);
+                
+                if ($httpCode == 200 && $response) {
+                    $data = json_decode($response, true);
+                    
+                    // Extract playcount
+                    $streamCount = 0;
+                    if (isset($data['data']['trackUnion']['playcount'])) {
+                        $streamCount = intval($data['data']['trackUnion']['playcount']);
+                    }
+                    
+                    if ($streamCount > 0) {
+                        // Insert into streams table: track_id, stream_date, stream_count
+                        if (insertStreamData($trackId, $date, $streamCount)) {
+                            $logMessage .= $trackName . " -> [" . number_format($streamCount) . "]\n";
+                            $successCount++;
+                        } else {
+                            $logMessage .= "❌ " . $trackName . " -> DB Error\n";
+                            $errorCount++;
+                        }
+                    } else {
+                        $logMessage .= "⚠️ " . $trackName . " -> No playcount data\n";
+                        $errorCount++;
+                    }
+                } else {
+                    $logMessage .= "❌ " . $trackName . " -> API Error (HTTP " . $httpCode . ")\n";
+                    $errorCount++;
+                }
+                
+                usleep(100000); // 100ms delay
+            }
+        }
+        
+        $logMessage .= "\n=== Summary ===\n";
+        $logMessage .= "✅ Success: " . $successCount . " tracks\n";
+        $logMessage .= "❌ Errors: " . $errorCount . " tracks\n";
+        
+        // Save artist stats if provided
+        if (!empty($monthlyListeners) || !empty($followers)) {
+            try {
+                $conn = getDBConnection();
+                $artistId = '0Sadg1vgvaPqGTOjxu0N6c'; // Girls' Generation artist ID
+                
+                $stmt = $conn->prepare("INSERT INTO artist_stats (artist_id, stat_date, monthly_listeners, followers) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE monthly_listeners = VALUES(monthly_listeners), followers = VALUES(followers)");
+                $stmt->bind_param("ssii", $artistId, $date, $monthlyListeners, $followers);
+                $stmt->execute();
+                
+                $logMessage .= "\n✅ Artist stats saved\n";
+                if ($monthlyListeners) $logMessage .= "Monthly Listeners: " . number_format($monthlyListeners) . "\n";
+                if ($followers) $logMessage .= "Followers: " . number_format($followers) . "\n";
+                
+                $stmt->close();
+                $conn->close();
+            } catch (Exception $e) {
+                $logMessage .= "\n❌ Artist stats error: " . $e->getMessage();
+            }
+        }
+    }
+}
+
+// Helper function to get all tracks from track table
+function getAllTracksFromDB() {
+    try {
+        $conn = getDBConnection();
+        $result = $conn->query("SELECT track_id, track_name FROM track ORDER BY track_name");
+        $tracks = [];
+        while ($row = $result->fetch_assoc()) {
+            $tracks[] = $row;
+        }
+        $conn->close();
+        return $tracks;
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+// Helper function to insert stream data
+function insertStreamData($trackId, $streamDate, $streamCount) {
+    try {
+        $conn = getDBConnection();
+        $stmt = $conn->prepare("INSERT INTO streams (track_id, stream_date, stream_count) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE stream_count = VALUES(stream_count)");
+        $stmt->bind_param("ssi", $trackId, $streamDate, $streamCount);
+        $success = $stmt->execute();
+        $stmt->close();
+        $conn->close();
+        return $success;
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+$defaultDate = date('Y-m-d', strtotime('-1 day'));
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scrap Data - SoshiSpotify</title>
+    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <i class="fas fa-sliders-h"></i>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="dashboard.php" class="nav-item">
+                    <i class="fas fa-th-large"></i>
+                </a>
+                <a href="members.php" class="nav-item">
+                    <i class="fas fa-users"></i>
+                </a>
+                <a href="scrape.php" class="nav-item active">
+                    <i class="fas fa-database"></i>
+                </a>
+            </nav>
+            <div class="sidebar-footer">
+                <a href="index.php" class="nav-item">
+                    <i class="fas fa-arrow-left"></i>
+                </a>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Top Bar -->
+            <header class="topbar">
+                <div class="topbar-left">
+                    <h1>Scrape Data From Spotify</h1>
+                </div>
+            </header>
+
+            <!-- Scrape Form -->
+            <div class="scrape-container">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Enter Information</h2>
+                    </div>
+                    <div class="card-body">
+                        <form method="POST" action="">
+                            <div class="form-table">
+                                <div class="form-head">
+                                    <span>Information</span>
+                                    <span>Input</span>
+                                </div>
+                                
+                                <div class="form-row">
+                                    <label class="form-label">Client-Token</label>
+                                    <input type="text" 
+                                           name="client_token" 
+                                           class="form-input" 
+                                           placeholder="Enter here..."
+                                           value="<?php echo isset($_POST['client_token']) ? htmlspecialchars($_POST['client_token']) : ''; ?>"
+                                           required>
+                                </div>
+
+                                <div class="form-row">
+                                    <label class="form-label">Authorization</label>
+                                    <input type="text" 
+                                           name="auth_bearer" 
+                                           class="form-input" 
+                                           placeholder="Enter here..."
+                                           value="<?php echo isset($_POST['auth_bearer']) ? htmlspecialchars($_POST['auth_bearer']) : ''; ?>"
+                                           required>
+                                </div>
+
+                                <div class="form-row">
+                                    <label class="form-label">Monthly Listeners</label>
+                                    <input type="number" 
+                                           name="monthly_listeners" 
+                                           class="form-input" 
+                                           placeholder="Enter here..."
+                                           value="<?php echo isset($_POST['monthly_listeners']) ? htmlspecialchars($_POST['monthly_listeners']) : ''; ?>">
+                                </div>
+
+                                <div class="form-row">
+                                    <label class="form-label">Followers</label>
+                                    <input type="number" 
+                                           name="followers" 
+                                           class="form-input" 
+                                           placeholder="Enter here..."
+                                           value="<?php echo isset($_POST['followers']) ? htmlspecialchars($_POST['followers']) : ''; ?>">
+                                </div>
+
+                                <div class="form-row">
+                                    <label class="form-label">Date</label>
+                                    <input type="date" 
+                                           name="date" 
+                                           class="form-input" 
+                                           value="<?php echo $defaultDate; ?>"
+                                           required>
+                                </div>
+                            </div>
+                            
+                            <div class="form-actions">
+                                <button type="submit" name="get_data" class="btn-submit">
+                                    Get Data
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Log Information -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Log Information</h2>
+                    </div>
+                    <div class="log-body">
+                        <div class="log-output">
+                            <?php if (!empty($logMessage)): ?>
+                                <pre><?php echo htmlspecialchars($logMessage); ?></pre>
+                            <?php else: ?>
+                                <p class="log-placeholder">Gee Streams: XXX.XXX<br>ERROR BRUH.....</p>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+</body>
+</html>

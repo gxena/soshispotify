@@ -69,16 +69,6 @@ foreach ($topArtistsAllTime as $artist) {
 
 // Get chart data for current month
 $chartData = getDailyStreamsChart(31, $filter);
-if (empty($chartData['data'])) {
-    // Generate dummy data
-    $labels = [];
-    $data = [];
-    for ($i = 1; $i <= 31; $i++) {
-        $labels[] = $i . '/1';
-        $data[] = rand(150000, 700000);
-    }
-    $chartData = ['labels' => $labels, 'data' => $data];
-}
 
 // Get all artists for filter dropdown
 $allArtists = getArtistList();
@@ -125,6 +115,7 @@ $displayDate = date('d M Y', strtotime($latestDate));
                 </div>
                 <div class="topbar-right">
                     <select class="filter-dropdown" onchange="location.href='dashboard.php?filter='+this.value">
+                        <option value="all" <?php echo $filter=='all'?'selected':''; ?>>All</option>
                         <option value="0Sadg1vgvaPqGTOjxu0N6c" <?php echo $filter=='0Sadg1vgvaPqGTOjxu0N6c'?'selected':''; ?>>Girls' Generation</option>
                         <option value="groups" <?php echo $filter=='groups'?'selected':''; ?>>Groups (GG + Subunits)</option>
                         <option value="solo" <?php echo $filter=='solo'?'selected':''; ?>>Solo (All Members)</option>
@@ -134,9 +125,9 @@ $displayDate = date('d M Y', strtotime($latestDate));
                         </optgroup>
                         <optgroup label="Solo Members">
                             <?php 
-                            $subunitIds = ['0Sadg1vgvaPqGTOjxu0N6c', '7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb'];
+                            $excludeIds = ['0Sadg1vgvaPqGTOjxu0N6c', '7AKHnZVqwXYuUwWJ8UGL5q', '1foL9hLC9M6U94dINtOYfb', '3U7bOaJLuFkrmDQ1C1OqKl', '2lkCfFklQDBPlQzS4tR3VP'];
                             foreach ($allArtists as $artist): 
-                                if (!in_array($artist['artist_id'], $subunitIds)):
+                                if (!in_array($artist['artist_id'], $excludeIds)):
                             ?>
                             <option value="<?php echo $artist['artist_id']; ?>" <?php echo $filter==$artist['artist_id']?'selected':''; ?>><?php echo htmlspecialchars($artist['artist_name']); ?></option>
                             <?php 
@@ -162,7 +153,7 @@ $displayDate = date('d M Y', strtotime($latestDate));
 
                 <div class="stat-card">
                     <div class="stat-info">
-                        <h4>Daily Streams (GG)</h4>
+                        <h4>Daily Streams</h4>
                         <h2><?php echo number_format($dailyStreams); ?></h2>
                         <span class="stat-change <?php echo $dailyStreamsPrev >= 0 ? 'positive' : 'negative'; ?>">
                             <i class="fas fa-arrow-<?php echo $dailyStreamsPrev >= 0 ? 'up' : 'down'; ?>"></i> 

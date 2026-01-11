@@ -160,6 +160,68 @@ body {
     gap: 1rem;
 }
 
+.download-btn {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: none;
+    background: linear-gradient(135deg, var(--primary-pink) 0%, var(--dark-pink) 100%);
+    color: white;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: 'Poppins', sans-serif;
+    font-weight: 500;
+    box-shadow: 0 2px 8px rgba(255, 20, 147, 0.2);
+}
+
+.download-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(255, 20, 147, 0.3);
+}
+
+.download-btn:active {
+    transform: translateY(0);
+}
+
+.download-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.copy-stats-btn {
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    border: none;
+    background: linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%);
+    color: white;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: 'Poppins', sans-serif;
+    font-weight: 500;
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.2);
+}
+
+.copy-stats-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+}
+
+.copy-stats-btn:active {
+    transform: translateY(0);
+}
+
+.copy-stats-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
 .filter-dropdown {
     padding: 0.5rem 1rem;
     border-radius: 8px;

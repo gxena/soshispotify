@@ -377,67 +377,165 @@ function getArtistStatsComparisonByFilter($filter) {
         $placeholders = str_repeat('?,', count($artistIds) - 1) . '?';
         $types = str_repeat('s', count($artistIds));
         
-        // Get latest stats for all artists in filter
-        $sql = "
-            SELECT 
-                SUM(ast.monthly_listeners) as total_ml,
-                SUM(ast.followers) as total_followers
-            FROM artist_stats ast
-            INNER JOIN (
-                SELECT artist_id, MAX(stat_date) as max_date
-                FROM artist_stats
-                WHERE artist_id IN ($placeholders)
-                GROUP BY artist_id
-            ) latest ON ast.artist_id = latest.artist_id AND ast.stat_date = latest.max_date
-        ";
+        // Check if this is a multi-profile artist (Tiffany, Hyoyeon, Sooyoung)
+        $isMultiProfile = count($artistIds) == 2 && (
+            (in_array('1t2HKR34gLWuQyyzLHcSm4', $artistIds) && in_array('2lkCfFklQDBPlQzS4tR3VP', $artistIds)) || // Tiffany
+            (in_array('0B3I6YgdnfXehUCpsO6oB8', $artistIds) && in_array('3U7bOaJLuFkrmDQ1C1OqKl', $artistIds)) || // Hyoyeon
+            (in_array('4k2XSHFx7PuRL7rgE3qncg', $artistIds) && in_array('2mTYQHj19falvbVgsh6nkg', $artistIds))    // Sooyoung
+        );
         
-        $stmt = $conn->prepare($sql);
-        $stmt->bind_param($types, ...$artistIds);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $latestData = $result->fetch_assoc();
-        $stmt->close();
-        
-        // Get yesterday's stats
-        $sql2 = "
-            SELECT 
-                SUM(ast.monthly_listeners) as total_ml,
-                SUM(ast.followers) as total_followers
-            FROM artist_stats ast
-            INNER JOIN (
-                SELECT artist_id, MAX(stat_date) as max_date
-                FROM artist_stats
-                WHERE artist_id IN ($placeholders)
-                AND stat_date < (
-                    SELECT MAX(stat_date) FROM artist_stats WHERE artist_id IN ($placeholders)
-                )
-                GROUP BY artist_id
-            ) yesterday ON ast.artist_id = yesterday.artist_id AND ast.stat_date = yesterday.max_date
-        ";
-        
-        $params = array_merge($artistIds, $artistIds);
-        $types2 = str_repeat('s', count($params));
-        
-        $stmt2 = $conn->prepare($sql2);
-        $stmt2->bind_param($types2, ...$params);
-        $stmt2->execute();
-        $result2 = $stmt2->get_result();
-        $yesterdayData = $result2->fetch_assoc();
-        $stmt2->close();
-        
-        $conn->close();
-        
-        $ml_latest = $latestData['total_ml'] ?? 0;
-        $ml_yesterday = $yesterdayData['total_ml'] ?? 0;
-        $followers_latest = $latestData['total_followers'] ?? 0;
-        $followers_yesterday = $yesterdayData['total_followers'] ?? 0;
-        
-        return [
-            'monthly_listeners' => $ml_latest,
-            'monthly_listeners_diff' => $ml_latest - $ml_yesterday,
-            'followers' => $followers_latest,
-            'followers_diff' => $followers_latest - $followers_yesterday
-        ];
+        if ($isMultiProfile) {
+            // Get individual stats for each profile
+            $sql = "
+                SELECT 
+                    ast.artist_id,
+                    ast.monthly_listeners,
+                    ast.followers
+                FROM artist_stats ast
+                INNER JOIN (
+                    SELECT artist_id, MAX(stat_date) as max_date
+                    FROM artist_stats
+                    WHERE artist_id IN ($placeholders)
+                    GROUP BY artist_id
+                ) latest ON ast.artist_id = latest.artist_id AND ast.stat_date = latest.max_date
+                ORDER BY ast.artist_id
+            ";
+            
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param($types, ...$artistIds);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            
+            $profiles = [];
+            while ($row = $result->fetch_assoc()) {
+                $profiles[$row['artist_id']] = [
+                    'ml' => $row['monthly_listeners'],
+                    'followers' => $row['followers']
+                ];
+            }
+            $stmt->close();
+            
+            // Get yesterday's stats
+            $sql2 = "
+                SELECT 
+                    ast.artist_id,
+                    ast.monthly_listeners,
+                    ast.followers
+                FROM artist_stats ast
+                INNER JOIN (
+                    SELECT artist_id, MAX(stat_date) as max_date
+                    FROM artist_stats
+                    WHERE artist_id IN ($placeholders)
+                    AND stat_date < (
+                        SELECT MAX(stat_date) FROM artist_stats WHERE artist_id IN ($placeholders)
+                    )
+                    GROUP BY artist_id
+                ) yesterday ON ast.artist_id = yesterday.artist_id AND ast.stat_date = yesterday.max_date
+                ORDER BY ast.artist_id
+            ";
+            
+            $params = array_merge($artistIds, $artistIds);
+            $types2 = str_repeat('s', count($params));
+            
+            $stmt2 = $conn->prepare($sql2);
+            $stmt2->bind_param($types2, ...$params);
+            $stmt2->execute();
+            $result2 = $stmt2->get_result();
+            
+            $profilesYesterday = [];
+            while ($row = $result2->fetch_assoc()) {
+                $profilesYesterday[$row['artist_id']] = [
+                    'ml' => $row['monthly_listeners'],
+                    'followers' => $row['followers']
+                ];
+            }
+            $stmt2->close();
+            $conn->close();
+            
+            // Format as arrays for display
+            $mlValues = [];
+            $mlDiffs = [];
+            $followersValues = [];
+            $followersDiffs = [];
+            
+            foreach ($artistIds as $id) {
+                $mlValues[] = $profiles[$id]['ml'] ?? 0;
+                $mlDiffs[] = ($profiles[$id]['ml'] ?? 0) - ($profilesYesterday[$id]['ml'] ?? 0);
+                $followersValues[] = $profiles[$id]['followers'] ?? 0;
+                $followersDiffs[] = ($profiles[$id]['followers'] ?? 0) - ($profilesYesterday[$id]['followers'] ?? 0);
+            }
+            
+            return [
+                'monthly_listeners' => $mlValues,  // Array of values
+                'monthly_listeners_diff' => $mlDiffs,  // Array of diffs
+                'followers' => $followersValues,  // Array of values
+                'followers_diff' => $followersDiffs,  // Array of diffs
+                'is_multi_profile' => true
+            ];
+        } else {
+            // Normal aggregation for groups, solo filter, or single artists
+            $sql = "
+                SELECT 
+                    SUM(ast.monthly_listeners) as total_ml,
+                    SUM(ast.followers) as total_followers
+                FROM artist_stats ast
+                INNER JOIN (
+                    SELECT artist_id, MAX(stat_date) as max_date
+                    FROM artist_stats
+                    WHERE artist_id IN ($placeholders)
+                    GROUP BY artist_id
+                ) latest ON ast.artist_id = latest.artist_id AND ast.stat_date = latest.max_date
+            ";
+            
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param($types, ...$artistIds);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            $latestData = $result->fetch_assoc();
+            $stmt->close();
+            
+            // Get yesterday's stats
+            $sql2 = "
+                SELECT 
+                    SUM(ast.monthly_listeners) as total_ml,
+                    SUM(ast.followers) as total_followers
+                FROM artist_stats ast
+                INNER JOIN (
+                    SELECT artist_id, MAX(stat_date) as max_date
+                    FROM artist_stats
+                    WHERE artist_id IN ($placeholders)
+                    AND stat_date < (
+                        SELECT MAX(stat_date) FROM artist_stats WHERE artist_id IN ($placeholders)
+                    )
+                    GROUP BY artist_id
+                ) yesterday ON ast.artist_id = yesterday.artist_id AND ast.stat_date = yesterday.max_date
+            ";
+            
+            $params = array_merge($artistIds, $artistIds);
+            $types2 = str_repeat('s', count($params));
+            
+            $stmt2 = $conn->prepare($sql2);
+            $stmt2->bind_param($types2, ...$params);
+            $stmt2->execute();
+            $result2 = $stmt2->get_result();
+            $yesterdayData = $result2->fetch_assoc();
+            $stmt2->close();
+            
+            $conn->close();
+            
+            $ml_latest = $latestData['total_ml'] ?? 0;
+            $ml_yesterday = $yesterdayData['total_ml'] ?? 0;
+            $followers_latest = $latestData['total_followers'] ?? 0;
+            $followers_yesterday = $yesterdayData['total_followers'] ?? 0;
+            
+            return [
+                'monthly_listeners' => $ml_latest,
+                'monthly_listeners_diff' => $ml_latest - $ml_yesterday,
+                'followers' => $followers_latest,
+                'followers_diff' => $followers_latest - $followers_yesterday,
+                'is_multi_profile' => false
+            ];
+        }
     } catch (Exception $e) {
         return [
             'monthly_listeners' => 0,
@@ -525,6 +623,108 @@ function getTopTracksDailyIncrease($limit = 5, $filter = '0Sadg1vgvaPqGTOjxu0N6c
         while ($row = $result->fetch_assoc()) {
             $tracks[] = ['track_name' => $row['track_name'], 'plays' => $row['daily_increase']];
         }
+        $stmt->close();
+        $conn->close();
+        return $tracks;
+    } catch (Exception $e) {
+        return [];
+    }
+}
+
+// Get top 20 tracks with rankings, daily increase, percentage change, and total streams
+function getTop20TracksForCard($filter = '0Sadg1vgvaPqGTOjxu0N6c') {
+    try {
+        $conn = getDBConnection();
+        $latestDate = getLatestStreamDate();
+        
+        // Get yesterday's date
+        $stmt = $conn->prepare("SELECT MAX(stream_date) as prev FROM streams WHERE stream_date < ?");
+        $stmt->bind_param("s", $latestDate);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $prevDate = $result->fetch_assoc()['prev'] ?? null;
+        $stmt->close();
+        
+        if (!$prevDate) {
+            return [];
+        }
+        
+        if ($filter === 'all') {
+            // Get ALL tracks (no artist filter)
+            $sql = "
+                SELECT t.track_name,
+                       COALESCE(s1.stream_count, 0) as current_streams,
+                       COALESCE(s2.stream_count, 0) as prev_streams,
+                       COALESCE(s1.stream_count, 0) - COALESCE(s2.stream_count, 0) as daily_increase
+                FROM track t
+                LEFT JOIN streams s1 ON t.track_id = s1.track_id AND s1.stream_date = ?
+                LEFT JOIN streams s2 ON t.track_id = s2.track_id AND s2.stream_date = ?
+                GROUP BY t.track_id, t.track_name
+                HAVING daily_increase > 0
+                ORDER BY daily_increase DESC
+                LIMIT 20
+            ";
+            
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param('ss', $latestDate, $prevDate);
+        } else {
+            $artistIds = getArtistIdsByFilter($filter);
+            
+            if (empty($artistIds)) return [];
+            
+            $placeholders = str_repeat('?,', count($artistIds) - 1) . '?';
+            
+            $sql = "
+                SELECT t.track_name,
+                       COALESCE(s1.stream_count, 0) as current_streams,
+                       COALESCE(s2.stream_count, 0) as prev_streams,
+                       COALESCE(s1.stream_count, 0) - COALESCE(s2.stream_count, 0) as daily_increase
+                FROM track t
+                JOIN track_artist ta ON t.track_id = ta.track_id
+                LEFT JOIN streams s1 ON t.track_id = s1.track_id AND s1.stream_date = ?
+                LEFT JOIN streams s2 ON t.track_id = s2.track_id AND s2.stream_date = ?
+                WHERE ta.artist_id IN ($placeholders)
+                GROUP BY t.track_id, t.track_name
+                HAVING daily_increase > 0 
+                ORDER BY daily_increase DESC 
+                LIMIT 20
+            ";
+            
+            $params = array_merge([$latestDate, $prevDate], $artistIds);
+            $types = 'ss' . str_repeat('s', count($artistIds));
+            
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param($types, ...$params);
+        }
+        
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $tracks = [];
+        $rank = 1;
+        $prevRank = [];
+        
+        while ($row = $result->fetch_assoc()) {
+            $dailyIncrease = $row['daily_increase'];
+            $currentStreams = $row['current_streams'];
+            $prevStreams = $row['prev_streams'];
+            
+            // Calculate percentage change
+            $percentChange = 0;
+            if ($prevStreams > 0) {
+                $percentChange = (($dailyIncrease) / $prevStreams) * 100;
+            }
+            
+            $tracks[] = [
+                'rank' => $rank,
+                'track_name' => $row['track_name'],
+                'daily_streams' => $dailyIncrease,
+                'percent_change' => $percentChange,
+                'total_streams' => $currentStreams,
+                'rank_change' => '=' // Default to same, can be enhanced later with historical ranking
+            ];
+            $rank++;
+        }
+        
         $stmt->close();
         $conn->close();
         return $tracks;

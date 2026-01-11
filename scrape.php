@@ -314,33 +314,13 @@ $defaultDate = date('Y-m-d', strtotime('-1 day'));
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Scrap Data - SoshiSpotify</title>
-    <link rel="stylesheet" href="assets/css/style.css">
+    <link rel="icon" type="image/png" href="PROFILE.png">
+    <link rel="stylesheet" href="assets/css/style.css?v=<?php echo filemtime('assets/css/style.css'); ?>">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
     <div class="dashboard-container">
-        <!-- Sidebar -->
-        <aside class="sidebar">
-            <div class="sidebar-header">
-                <i class="fas fa-sliders-h"></i>
-            </div>
-            <nav class="sidebar-nav">
-                <a href="dashboard.php" class="nav-item">
-                    <i class="fas fa-th-large"></i>
-                </a>
-                <a href="members.php" class="nav-item">
-                    <i class="fas fa-users"></i>
-                </a>
-                <a href="scrape.php" class="nav-item active">
-                    <i class="fas fa-database"></i>
-                </a>
-            </nav>
-            <div class="sidebar-footer">
-                <a href="index.php" class="nav-item">
-                    <i class="fas fa-arrow-left"></i>
-                </a>
-            </div>
-        </aside>
+        <?php $activePage = 'scrape'; include 'includes/sidebar.php'; ?>
 
         <!-- Main Content -->
         <main class="main-content">

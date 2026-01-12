@@ -306,7 +306,13 @@ function insertStreamData($trackId, $streamDate, $streamCount) {
     }
 }
 
-$defaultDate = date('Y-m-d', strtotime('-1 day'));
+// Get latest date from streams and set default to +1 day
+$latestStreamDate = getLatestStreamDate();
+if ($latestStreamDate) {
+    $defaultDate = date('Y-m-d', strtotime($latestStreamDate . ' +1 day'));
+} else {
+    $defaultDate = date('Y-m-d'); // If no data, use today
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -369,9 +375,15 @@ $defaultDate = date('Y-m-d', strtotime('-1 day'));
                                     <label class="form-label">Date</label>
                                     <input type="date" 
                                            name="date" 
+                                           id="scrapeDate"
                                            class="form-input" 
                                            value="<?php echo $defaultDate; ?>"
+                                           min="<?php echo $latestStreamDate ? date('Y-m-d', strtotime($latestStreamDate . ' +1 day')) : date('Y-m-d'); ?>"
+                                           onchange="validateScrapeDate()"
                                            required>
+                                    <small id="dateWarning" style="color: #EF4444; display: none; margin-top: 5px;">
+                                        ⚠️ Warning: Selected date is on or before the latest stream date (<?php echo $latestStreamDate; ?>). This may cause duplicate data.
+                                    </small>
                                 </div>
                                 
                                 <div class="form-row">
@@ -416,5 +428,27 @@ $defaultDate = date('Y-m-d', strtotime('-1 day'));
             </div>
         </main>
     </div>
+    
+    <script>
+    function validateScrapeDate() {
+        const dateInput = document.getElementById('scrapeDate');
+        const warning = document.getElementById('dateWarning');
+        const latestDate = '<?php echo $latestStreamDate; ?>';
+        
+        if (dateInput.value && latestDate) {
+            const selectedDate = new Date(dateInput.value);
+            const latest = new Date(latestDate);
+            
+            if (selectedDate <= latest) {
+                warning.style.display = 'block';
+            } else {
+                warning.style.display = 'none';
+            }
+        }
+    }
+    
+    // Run validation on page load
+    window.addEventListener('DOMContentLoaded', validateScrapeDate);
+    </script>
 </body>
 </html>

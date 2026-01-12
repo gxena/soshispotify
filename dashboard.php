@@ -261,9 +261,15 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
                     <div class="stat-info">
                         <h4>Daily Streams</h4>
                         <h2><?php echo number_format($dailyStreams); ?></h2>
-                        <span class="stat-change <?php echo $dailyStreamsPrev >= 0 ? 'positive' : 'negative'; ?>">
-                            <i class="fas fa-arrow-<?php echo $dailyStreamsPrev >= 0 ? 'up' : 'down'; ?>"></i> 
-                            <?php echo ($dailyStreamsPrev >= 0 ? '+' : '') . number_format($dailyStreamsPrev); ?> from yesterday
+                        <?php 
+                        $percentChange = 0;
+                        if ($dailyStreamsPrev > 0) {
+                            $percentChange = (($dailyStreams - $dailyStreamsPrev) / $dailyStreamsPrev) * 100;
+                        }
+                        ?>
+                        <span class="stat-change <?php echo $dailyStreams >= $dailyStreamsPrev ? 'positive' : 'negative'; ?>">
+                            <i class="fas fa-arrow-<?php echo $dailyStreams >= $dailyStreamsPrev ? 'up' : 'down'; ?>"></i> 
+                            <?php echo ($dailyStreams - $dailyStreamsPrev >= 0 ? '+' : '') . number_format($dailyStreams - $dailyStreamsPrev); ?> (<?php echo number_format($percentChange, 2); ?>%) from yesterday
                         </span>
                     </div>
                     <div class="stat-icon yellow">
@@ -473,21 +479,21 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
                 <div style="color: white; font-size: 20px; margin-bottom: -4px; font-family: 'Poppins', sans-serif;">Spotify - Total Streams</div>
                 <div style="color: white; font-size: 32px; font-weight: bold; font-family: 'Poppins', sans-serif;">
                     <?php echo number_format($totalStreams); ?> 
-                    <?php if ($dailyStreams - $dailyStreamsPrev != 0): ?>
-                        <span style="font-size: 24px;">(<?php echo $dailyStreams - $dailyStreamsPrev > 0 ? '+' : ''; ?><?php echo number_format($dailyStreams - $dailyStreamsPrev); ?>)</span>
+                    <?php if ($dailyStreams != 0): ?>
+                        <span style="font-size: 24px;">(<?php echo $dailyStreams > 0 ? '+' : ''; ?><?php echo number_format($dailyStreams); ?>)</span>
                     <?php endif; ?>
                 </div>
             </div>
 
             <!-- Table -->
-            <table style="width: 100%; border-collapse: separate; border-spacing: 0; background: rgba(255, 255, 255, 0.95); border-radius: 10px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.15); flex: 1;">
+            <table style="width: 100%; border-collapse: separate; border-spacing: 0; background: rgba(255, 255, 255, 0.95); border-radius: 8px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.15); flex: 1;">
                 <thead>
                     <tr style="background: <?php echo $cardHeaderColor; ?>; color: white;">
-                        <th style="padding: 10px 6px; text-align: center; font-weight: 600; font-size: 15px; border-bottom: 2px solid rgba(255,255,255,0.2); font-family: 'Poppins', sans-serif;">#</th>
-                        <th style="padding: 10px 12px; text-align: left; font-weight: 600; font-size: 15px; border-bottom: 2px solid rgba(255,255,255,0.2); font-family: 'Poppins', sans-serif;">Song</th>
-                        <th style="padding: 10px 6px; text-align: right; font-weight: 600; font-size: 15px; border-bottom: 2px solid rgba(255,255,255,0.2); font-family: 'Poppins', sans-serif;">Daily Streams</th>
-                        <th style="padding: 10px 6px 10px 20px; text-align: center; font-weight: 600; font-size: 15px; border-bottom: 2px solid rgba(255,255,255,0.2); font-family: 'Poppins', sans-serif;">+/-</th>
-                        <th style="padding: 10px 10px; text-align: right; font-weight: 600; font-size: 15px; border-bottom: 2px solid rgba(255,255,255,0.2); font-family: 'Poppins', sans-serif;">Total Stream</th>
+                        <th style="padding: 10px 6px; text-align: center; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;">#</th>
+                        <th style="padding: 10px 12px; text-align: left; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;">Song</th>
+                        <th style="padding: 10px 6px; text-align: right; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;">Daily Streams</th>
+                        <th style="padding: 10px 6px 10px 20px; text-align: center; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;">+/-</th>
+                        <th style="padding: 10px 10px; text-align: right; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;">Total Stream</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -500,11 +506,11 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
                         $percentSign = $track['percent_change'] >= 0 ? '+' : '';
                     ?>
                     <tr style="background: <?php echo $bgColor; ?>;">
-                        <td style="padding: 7px 6px; text-align: center; color: #1F2937; font-weight: 500; font-size: 12px; font-family: 'Poppins', sans-serif;"><?php echo $track['rank']; ?>(<?php echo $track['rank_change']; ?>)</td>
-                        <td style="padding: 7px 12px; text-align: left; color: #1F2937; font-weight: 600; font-size: 14px; font-family: 'Poppins', sans-serif;"><?php echo htmlspecialchars($track['track_name']); ?></td>
-                        <td style="padding: 7px 6px; text-align: right; color: #1F2937; font-weight: 500; font-size: 14px; font-family: 'Poppins', sans-serif;"><?php echo number_format($track['daily_streams']); ?></td>
-                        <td style="padding: 7px 6px 7px 20px; text-align: center; color: <?php echo $percentColor; ?>; font-weight: 600; font-size: 14px; font-family: 'Poppins', sans-serif; opacity: 0.8;"><?php echo $percentSign . number_format($track['percent_change'], 2); ?>%</td>
-                        <td style="padding: 7px 10px; text-align: right; color: #1F2937; font-weight: 500; font-size: 14px; font-family: 'Poppins', sans-serif;"><?php echo number_format($track['total_streams']); ?></td>
+                        <td style="padding: 6px 6px; text-align: center; color: #1F2937; font-weight: 500; font-size: 12px; font-family: 'Poppins', sans-serif;"><?php echo $track['rank']; ?>(<?php echo $track['rank_change']; ?>)</td>
+                        <td style="padding: 6px 12px; text-align: left; color: #1F2937; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;"><?php echo htmlspecialchars($track['track_name']); ?></td>
+                        <td style="padding: 6px 6px; text-align: right; color: #1F2937; font-weight: 500; font-size: 16px; font-family: 'Poppins', sans-serif;"><?php echo number_format($track['daily_streams']); ?></td>
+                        <td style="padding: 6px 6px 7px 20px; text-align: center; color: <?php echo $percentColor; ?>; font-weight: 600; font-size: 14px; font-family: 'Poppins', sans-serif; opacity: 0.8;"><?php echo $percentSign . number_format($track['percent_change'], 2); ?>%</td>
+                        <td style="padding: 6px 10px; text-align: right; color: #1F2937; font-weight: 500; font-size: 14px; font-family: 'Poppins', sans-serif;"><?php echo number_format($track['total_streams']); ?></td>
                     </tr>
                     <?php endforeach; ?>
                 </tbody>
@@ -513,7 +519,7 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
             <!-- Footer -->
             <div style="margin-top: -4px; display: flex; justify-content: space-between; align-items: center; padding: 10px 15px 5px 15px;">
                 <div style="color: white; font-size: 14px; font-weight: 500; font-family: 'Poppins', sans-serif;"><?php echo date('d F, Y', strtotime($latestDate)); ?></div>
-                <div style="color: white; font-size: 14px; font-weight: 600; font-family: 'Poppins', sans-serif;">SoshiSpotify</div>
+                <div style="color: white; font-size: 14px; font-weight: 600; font-family: 'Poppins', sans-serif;">by SoshiSpotify</div>
             </div>
         </div>
     </div>

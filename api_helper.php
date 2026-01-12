@@ -649,16 +649,27 @@ function getTop20TracksForCard($filter = '0Sadg1vgvaPqGTOjxu0N6c') {
             return [];
         }
         
+        // Get day before yesterday for calculating yesterday's daily
+        $stmt = $conn->prepare("SELECT MAX(stream_date) as day_before FROM streams WHERE stream_date < ?");
+        $stmt->bind_param("s", $prevDate);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $dayBeforeDate = $result->fetch_assoc()['day_before'] ?? null;
+        $stmt->close();
+        
         if ($filter === 'all') {
             // Get ALL tracks (no artist filter)
             $sql = "
                 SELECT t.track_name,
                        COALESCE(s1.stream_count, 0) as current_streams,
                        COALESCE(s2.stream_count, 0) as prev_streams,
-                       COALESCE(s1.stream_count, 0) - COALESCE(s2.stream_count, 0) as daily_increase
+                       COALESCE(s3.stream_count, 0) as day_before_streams,
+                       COALESCE(s1.stream_count, 0) - COALESCE(s2.stream_count, 0) as daily_increase,
+                       COALESCE(s2.stream_count, 0) - COALESCE(s3.stream_count, 0) as prev_daily_increase
                 FROM track t
                 LEFT JOIN streams s1 ON t.track_id = s1.track_id AND s1.stream_date = ?
                 LEFT JOIN streams s2 ON t.track_id = s2.track_id AND s2.stream_date = ?
+                LEFT JOIN streams s3 ON t.track_id = s3.track_id AND s3.stream_date = ?
                 GROUP BY t.track_id, t.track_name
                 HAVING daily_increase > 0
                 ORDER BY daily_increase DESC
@@ -666,7 +677,7 @@ function getTop20TracksForCard($filter = '0Sadg1vgvaPqGTOjxu0N6c') {
             ";
             
             $stmt = $conn->prepare($sql);
-            $stmt->bind_param('ss', $latestDate, $prevDate);
+            $stmt->bind_param('sss', $latestDate, $prevDate, $dayBeforeDate);
         } else {
             $artistIds = getArtistIdsByFilter($filter);
             
@@ -678,11 +689,14 @@ function getTop20TracksForCard($filter = '0Sadg1vgvaPqGTOjxu0N6c') {
                 SELECT t.track_name,
                        COALESCE(s1.stream_count, 0) as current_streams,
                        COALESCE(s2.stream_count, 0) as prev_streams,
-                       COALESCE(s1.stream_count, 0) - COALESCE(s2.stream_count, 0) as daily_increase
+                       COALESCE(s3.stream_count, 0) as day_before_streams,
+                       COALESCE(s1.stream_count, 0) - COALESCE(s2.stream_count, 0) as daily_increase,
+                       COALESCE(s2.stream_count, 0) - COALESCE(s3.stream_count, 0) as prev_daily_increase
                 FROM track t
                 JOIN track_artist ta ON t.track_id = ta.track_id
                 LEFT JOIN streams s1 ON t.track_id = s1.track_id AND s1.stream_date = ?
                 LEFT JOIN streams s2 ON t.track_id = s2.track_id AND s2.stream_date = ?
+                LEFT JOIN streams s3 ON t.track_id = s3.track_id AND s3.stream_date = ?
                 WHERE ta.artist_id IN ($placeholders)
                 GROUP BY t.track_id, t.track_name
                 HAVING daily_increase > 0 
@@ -690,8 +704,8 @@ function getTop20TracksForCard($filter = '0Sadg1vgvaPqGTOjxu0N6c') {
                 LIMIT 20
             ";
             
-            $params = array_merge([$latestDate, $prevDate], $artistIds);
-            $types = 'ss' . str_repeat('s', count($artistIds));
+            $params = array_merge([$latestDate, $prevDate, $dayBeforeDate], $artistIds);
+            $types = 'sss' . str_repeat('s', count($artistIds));
             
             $stmt = $conn->prepare($sql);
             $stmt->bind_param($types, ...$params);
@@ -701,17 +715,83 @@ function getTop20TracksForCard($filter = '0Sadg1vgvaPqGTOjxu0N6c') {
         $result = $stmt->get_result();
         $tracks = [];
         $rank = 1;
-        $prevRank = [];
+        
+        // Get yesterday's rankings first
+        $yesterdayRanks = [];
+        if ($filter === 'all') {
+            $sqlPrev = "
+                SELECT t.track_name,
+                       COALESCE(s2.stream_count, 0) - COALESCE(s3.stream_count, 0) as prev_daily_increase
+                FROM track t
+                LEFT JOIN streams s2 ON t.track_id = s2.track_id AND s2.stream_date = ?
+                LEFT JOIN streams s3 ON t.track_id = s3.track_id AND s3.stream_date = (SELECT MAX(stream_date) FROM streams WHERE stream_date < ?)
+                GROUP BY t.track_id, t.track_name
+                HAVING prev_daily_increase > 0
+                ORDER BY prev_daily_increase DESC
+                LIMIT 20
+            ";
+            $stmtPrev = $conn->prepare($sqlPrev);
+            $stmtPrev->bind_param('ss', $prevDate, $prevDate);
+        } else {
+            $artistIds = getArtistIdsByFilter($filter);
+            if (!empty($artistIds)) {
+                $placeholders = str_repeat('?,', count($artistIds) - 1) . '?';
+                $sqlPrev = "
+                    SELECT t.track_name,
+                           COALESCE(s2.stream_count, 0) - COALESCE(s3.stream_count, 0) as prev_daily_increase
+                    FROM track t
+                    JOIN track_artist ta ON t.track_id = ta.track_id
+                    LEFT JOIN streams s2 ON t.track_id = s2.track_id AND s2.stream_date = ?
+                    LEFT JOIN streams s3 ON t.track_id = s3.track_id AND s3.stream_date = (SELECT MAX(stream_date) FROM streams WHERE stream_date < ?)
+                    WHERE ta.artist_id IN ($placeholders)
+                    GROUP BY t.track_id, t.track_name
+                    HAVING prev_daily_increase > 0
+                    ORDER BY prev_daily_increase DESC
+                    LIMIT 20
+                ";
+                $paramsPrev = array_merge([$prevDate, $prevDate], $artistIds);
+                $typesPrev = 'ss' . str_repeat('s', count($artistIds));
+                $stmtPrev = $conn->prepare($sqlPrev);
+                $stmtPrev->bind_param($typesPrev, ...$paramsPrev);
+            }
+        }
+        
+        if (isset($stmtPrev)) {
+            $stmtPrev->execute();
+            $resultPrev = $stmtPrev->get_result();
+            $prevRank = 1;
+            while ($rowPrev = $resultPrev->fetch_assoc()) {
+                $yesterdayRanks[$rowPrev['track_name']] = $prevRank;
+                $prevRank++;
+            }
+            $stmtPrev->close();
+        }
         
         while ($row = $result->fetch_assoc()) {
             $dailyIncrease = $row['daily_increase'];
+            $prevDailyIncrease = $row['prev_daily_increase'] ?? 0;
             $currentStreams = $row['current_streams'];
             $prevStreams = $row['prev_streams'];
             
-            // Calculate percentage change
+            // Calculate percentage change: (today's daily - yesterday's daily) / yesterday's daily * 100
             $percentChange = 0;
-            if ($prevStreams > 0) {
-                $percentChange = (($dailyIncrease) / $prevStreams) * 100;
+            if ($prevDailyIncrease > 0) {
+                $percentChange = (($dailyIncrease - $prevDailyIncrease) / $prevDailyIncrease) * 100;
+            }
+            
+            // Calculate rank change
+            $rankChange = '=';
+            $trackName = $row['track_name'];
+            if (isset($yesterdayRanks[$trackName])) {
+                $prevRankNum = $yesterdayRanks[$trackName];
+                $rankDiff = $prevRankNum - $rank;
+                if ($rankDiff > 0) {
+                    $rankChange = '+' . $rankDiff;
+                } elseif ($rankDiff < 0) {
+                    $rankChange = $rankDiff;
+                }
+            } else {
+                $rankChange = 'NEW';
             }
             
             $tracks[] = [
@@ -720,7 +800,7 @@ function getTop20TracksForCard($filter = '0Sadg1vgvaPqGTOjxu0N6c') {
                 'daily_streams' => $dailyIncrease,
                 'percent_change' => $percentChange,
                 'total_streams' => $currentStreams,
-                'rank_change' => '=' // Default to same, can be enhanced later with historical ranking
+                'rank_change' => $rankChange
             ];
             $rank++;
         }

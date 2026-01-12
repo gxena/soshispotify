@@ -87,6 +87,9 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Albums - SoshiSpotify</title>
     <link rel="icon" type="image/png" href="PROFILE.png">
     <link rel="stylesheet" href="assets/css/style.css?v=<?php echo filemtime('assets/css/style.css'); ?>">
@@ -730,20 +733,24 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
         }
 
         function renderAlbumCard(data) {
-            const change = data.daily_streams;
-            const changePercent = data.total_streams > 0 ? ((change / data.total_streams) * 100).toFixed(2) : 0;
+            const todayDaily = data.daily_streams;
+            const yesterdayDaily = data.prev_daily_streams || 0;
+            const change = todayDaily - yesterdayDaily;
+            const changePercent = yesterdayDaily > 0 ? ((change / yesterdayDaily) * 100).toFixed(2) : 0;
             const isPositive = change >= 0;
             
             let tracksHtml = '';
             data.tracks.forEach(track => {
-                const trackChange = track.daily_streams;
-                const trackPercent = track.total_streams > 0 ? ((trackChange / track.total_streams) * 100).toFixed(2) : 0;
+                const trackTodayDaily = track.daily_streams;
+                const trackYesterdayDaily = track.prev_daily_streams || 0;
+                const trackChange = trackTodayDaily - trackYesterdayDaily;
+                const trackPercent = trackYesterdayDaily > 0 ? ((trackChange / trackYesterdayDaily) * 100).toFixed(2) : 0;
                 const trackPositive = trackChange >= 0;
                 
                 tracksHtml += `
                     <div class="track-row">
                         <div class="track-name">${escapeHtml(track.track_name)}</div>
-                        <div>${formatNumber(trackChange >= 0 ? trackChange : Math.abs(trackChange))}</div>
+                        <div>${formatNumber(trackTodayDaily)}</div>
                         <div>${formatNumber(track.total_streams)}</div>
                         <div class="track-change ${trackPositive ? 'positive' : 'negative'}">
                             ${trackPositive ? '+' : ''}${formatNumber(trackChange)}
@@ -768,7 +775,7 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
                         <div class="album-card-stats">
                             <div class="card-stat">
                                 <div class="card-stat-label">Today</div>
-                                <div class="card-stat-value">+${formatNumber(data.daily_streams)}</div>
+                                <div class="card-stat-value">+${formatNumber(todayDaily)}</div>
                             </div>
                             <div class="card-stat">
                                 <div class="card-stat-label">Total</div>
@@ -794,7 +801,7 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
                     ${tracksHtml}
                 </div>
                 <div class="album-card-footer">
-                    <div class="stream-date">${formatSimpleDate(data.stream_date || '<?= $latestDate ?>')}</div>
+                    <div class="stream-date">${formatSimpleDate(data.stream_date || <?php echo json_encode($latestDate); ?>)}</div>
                     <div class="brand">by SoshiSpotify</div>
                 </div>
             `;
@@ -871,9 +878,15 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
                 if (actions) actions.style.display = 'flex';
                 if (closeBtn) closeBtn.style.display = 'flex';
                 
-                // Download
+                // Download with format: [artist]_[album]_[type]_[date]
                 const albumName = document.querySelector('.album-card-title')?.textContent || 'album';
-                const filename = albumName.replace(/[^a-z0-9]/gi, '_').toLowerCase() + '_card.png';
+                const artistName = document.querySelector('.album-card-date')?.textContent.split(' •')[0] || 'artist';
+                const albumType = 'album';
+                const streamDate = <?php echo json_encode(date('Ymd', strtotime($latestDate))); ?>;
+                
+                const cleanArtist = artistName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                const cleanAlbum = albumName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                const filename = `${cleanArtist}_${cleanAlbum}_${albumType}_${streamDate}.png`;
                 
                 const link = document.createElement('a');
                 link.download = filename;

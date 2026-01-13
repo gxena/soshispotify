@@ -18,6 +18,9 @@ function getDBConnection() {
         die("Connection failed: " . $conn->connect_error);
     }
     
+    // Set charset to UTF-8 untuk support Hangul dan karakter khusus lainnya
+    $conn->set_charset("utf8mb4");
+    
     return $conn;
 }
 

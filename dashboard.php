@@ -472,11 +472,11 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
 
     <!-- Hidden Card for Download -->
     <div id="downloadCard" style="position: absolute; left: -9999px; width: 768px; height: 1024px; font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
-        <div style="background: linear-gradient(180deg, <?php echo $cardBgColor1; ?> 0%, <?php echo $cardBgColor2; ?> 100%); padding: 20px 25px 30px 25px; border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); height: 100%; display: flex; flex-direction: column; box-sizing: border-box;">
+        <div style="background: linear-gradient(180deg, <?php echo $cardBgColor1; ?> 0%, <?php echo $cardBgColor2; ?> 100%); padding: 20px 25px 30px 25px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); height: 100%; display: flex; flex-direction: column; box-sizing: border-box;">
             <!-- Header -->
-            <div style="text-align: center; margin-bottom: 12px; margin-top: 15px;">
-                <h1 style="color: white; font-size: 48px; font-weight: bold; margin: 0 0 4px 0; font-family: 'Poppins', sans-serif;"><?php echo htmlspecialchars($filterName); ?></h1>
-                <div style="color: white; font-size: 20px; margin-bottom: -4px; font-family: 'Poppins', sans-serif;">Spotify - Total Streams</div>
+            <div style="text-align: center; margin-bottom: 12px;">
+                <h1 style="color: white; font-size: 48px; font-weight: bold; font-family: 'Poppins', sans-serif;"><?php echo htmlspecialchars($filterName); ?></h1>
+                <div style="color: white; font-size: 20px; margin-bottom: -8px; font-family: 'Poppins', sans-serif;">Spotify - Total Streams</div>
                 <div style="color: white; font-size: 32px; font-weight: bold; font-family: 'Poppins', sans-serif;">
                     <?php echo number_format($totalStreams); ?> 
                     <?php if ($dailyStreams != 0): ?>
@@ -486,14 +486,14 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
             </div>
 
             <!-- Table -->
-            <table style="width: 100%; border-collapse: separate; border-spacing: 0; background: rgba(255, 255, 255, 0.95); border-radius: 8px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.15); flex: 1;">
+            <table style="width: 100%; border-collapse: separate; border-spacing: 0; background: rgba(255, 255, 255, 0.95); border-radius: 8px; overflow: hidden; box-shadow: 0 8px 20px rgba(0,0,0,0.15); flex: 1; table-layout: fixed;">
                 <thead>
                     <tr style="background: <?php echo $cardHeaderColor; ?>; color: white;">
-                        <th style="padding: 10px 6px; text-align: center; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;">#</th>
-                        <th style="padding: 10px 12px; text-align: left; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;">Song</th>
-                        <th style="padding: 10px 6px; text-align: right; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;">Daily Streams</th>
-                        <th style="padding: 10px 6px 10px 20px; text-align: center; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;">+/-</th>
-                        <th style="padding: 10px 10px; text-align: right; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;">Total Stream</th>
+                        <th style="padding: 10px 6px; text-align: center; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap; width: 70px;">#</th>
+                        <th style="padding: 10px 12px; text-align: left; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap; width: 280px;">Song</th>
+                        <th style="padding: 10px 6px; text-align: right; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap; width: 140px;">Daily Streams</th>
+                        <th style="padding: 10px 6px 10px 20px; text-align: center; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap; width: 90px;">+/-</th>
+                        <th style="padding: 10px 10px; text-align: right; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap; width: auto;">Total Stream</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -506,11 +506,11 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
                         $percentSign = $track['percent_change'] >= 0 ? '+' : '';
                     ?>
                     <tr style="background: <?php echo $bgColor; ?>;">
-                        <td style="padding: 6px 6px; text-align: center; color: #1F2937; font-weight: 500; font-size: 12px; font-family: 'Poppins', sans-serif;"><?php echo $track['rank']; ?>(<?php echo $track['rank_change']; ?>)</td>
-                        <td style="padding: 6px 12px; text-align: left; color: #1F2937; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap;"><?php echo htmlspecialchars($track['track_name']); ?></td>
-                        <td style="padding: 6px 6px; text-align: right; color: #1F2937; font-weight: 500; font-size: 16px; font-family: 'Poppins', sans-serif;"><?php echo number_format($track['daily_streams']); ?></td>
-                        <td style="padding: 6px 6px 7px 20px; text-align: center; color: <?php echo $percentColor; ?>; font-weight: 600; font-size: 14px; font-family: 'Poppins', sans-serif; opacity: 0.8;"><?php echo $percentSign . number_format($track['percent_change'], 2); ?>%</td>
-                        <td style="padding: 6px 10px; text-align: right; color: #1F2937; font-weight: 500; font-size: 14px; font-family: 'Poppins', sans-serif;"><?php echo number_format($track['total_streams']); ?></td>
+                        <td style="padding: 7px 6px; text-align: center; color: #1F2937; font-weight: 500; font-size: 12px; font-family: 'Poppins', sans-serif; width: 70px;"><?php echo $track['rank']; ?>(<?php echo $track['rank_change']; ?>)</td>
+                        <td style="padding: 7px 12px; width: 280px; max-width: 280px;"><div style="color: #1F2937; font-weight: 600; font-size: 16px; font-family: 'Poppins', sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 256px; display: block;"><?php echo htmlspecialchars($track['track_name']); ?></div></td>
+                        <td style="padding: 7px 6px; text-align: right; color: #1F2937; font-weight: 500; font-size: 16px; font-family: 'Poppins', sans-serif; width: 140px;"><?php echo number_format($track['daily_streams']); ?></td>
+                        <td style="padding: 7px 6px 7px 20px; text-align: center; color: <?php echo $percentColor; ?>; font-weight: 600; font-size: 14px; font-family: 'Poppins', sans-serif; opacity: 0.8; width: 90px;"><?php echo $percentSign . number_format($track['percent_change'], 2); ?>%</td>
+                        <td style="padding: 7px 10px; text-align: right; color: #1F2937; font-weight: 500; font-size: 14px; font-family: 'Poppins', sans-serif; width: auto;"><?php echo number_format($track['total_streams']); ?></td>
                     </tr>
                     <?php endforeach; ?>
                 </tbody>

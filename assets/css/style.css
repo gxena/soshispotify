@@ -65,6 +65,11 @@ body {
     left: 0;
     top: 0;
     z-index: 100;
+    transition: width 0.3s ease;
+}
+
+.sidebar.expanded {
+    width: 240px;
 }
 
 .sidebar-header {
@@ -73,6 +78,8 @@ body {
     align-items: center;
     justify-content: center;
     border-bottom: 1px solid #F3E8F0;
+    gap: 12px;
+    padding: 0 12px;
 }
 
 .sidebar-header i {
@@ -84,6 +91,13 @@ body {
     display: none;
 }
 
+.sidebar.expanded .sidebar-header span {
+    display: block;
+    font-weight: 600;
+    color: var(--primary-pink);
+    white-space: nowrap;
+}
+
 .sidebar-nav {
     flex: 1;
     padding: 1rem 0;
@@ -91,6 +105,11 @@ body {
     flex-direction: column;
     align-items: center;
     gap: 0.25rem;
+}
+
+.sidebar.expanded .sidebar-nav {
+    align-items: stretch;
+    padding: 1rem 0.5rem;
 }
 
 .nav-item {
@@ -103,10 +122,24 @@ body {
     text-decoration: none;
     border-radius: 10px;
     transition: all 0.2s;
+    position: relative;
+    gap: 12px;
+}
+
+.sidebar.expanded .nav-item {
+    width: 100%;
+    justify-content: flex-start;
+    padding: 0 12px;
 }
 
 .nav-item span {
     display: none;
+}
+
+.sidebar.expanded .nav-item span.nav-text {
+    display: inline-block;
+    font-size: 0.9rem;
+    white-space: nowrap;
 }
 
 .nav-item:hover {
@@ -121,6 +154,8 @@ body {
 
 .nav-item i {
     font-size: 1rem;
+    min-width: 20px;
+    text-align: center;
 }
 
 .sidebar-footer {
@@ -130,6 +165,24 @@ body {
     justify-content: center;
 }
 
+.sidebar-toggle {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    border: 1px solid #F3E8F0;
+    background: white;
+    color: var(--primary-pink);
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.sidebar-toggle:hover {
+    background: var(--accent-pink);
+}
+
 /* Main Content - Full Width */
 .main-content {
     flex: 1;
@@ -137,6 +190,12 @@ body {
     padding: 1.5rem 2rem;
     min-height: 100vh;
     width: calc(100% - 60px);
+    transition: margin-left 0.3s ease, width 0.3s ease;
+}
+
+.main-content.sidebar-expanded {
+    margin-left: 240px;
+    width: calc(100% - 240px);
 }
 
 /* Top Bar */

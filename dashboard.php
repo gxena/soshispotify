@@ -538,7 +538,7 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
                 const followers = <?php echo json_encode($followers); ?>;
                 const monthlyListeners = <?php echo json_encode($monthlyListeners); ?>;
                 const totalStreams = '<?php echo number_format($totalStreams); ?>'.replace(/,/g, '.');
-                const streamsChangeVal = <?php echo ($dailyStreams - $dailyStreamsPrev); ?>;
+                const streamsChangeVal = <?php echo ($dailyStreams); ?>;
                 const streamsChange = (streamsChangeVal > 0 ? '+' : '') + streamsChangeVal.toLocaleString().replace(/,/g, '.');
                 
                 // Handle multi-profile diffs separately

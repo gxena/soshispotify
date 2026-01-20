@@ -454,7 +454,7 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
         
         .tracks-header {
             display: grid;
-            grid-template-columns: 3fr 1fr 1fr 1fr 75px;
+            grid-template-columns: 30px 3fr 1fr 1fr 1fr 75px;
             gap: 15px;
             padding: 12px 15px;
             font-size: 11px;
@@ -463,15 +463,12 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
             font-weight: 600;
             background: var(--accent-pink);
             border-radius: 8px 8px 0 0;
-        }
-        
-        .tracks-header > div:not(:first-child) {
             text-align: center;
         }
         
         .track-row {
             display: grid;
-            grid-template-columns: 3fr 1fr 1fr 1fr 75px;
+            grid-template-columns: 30px 3fr 1fr 1fr 1fr 75px;
             gap: 15px;
             padding: 14px 15px;
             font-size: 14px;
@@ -480,7 +477,20 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
             align-items: center;
         }
         
-        .track-row > div:not(:first-child) {
+        .track-row > div:not(:nth-child(2)) {
+            text-align: center;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .track-row.empty {
+            opacity: 0.3;
+        }
+        
+        .track-number {
+            font-weight: 600;
+            color: var(--text-secondary);
             text-align: center;
             display: flex;
             align-items: center;
@@ -739,28 +749,56 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
             const changePercent = yesterdayDaily > 0 ? ((change / yesterdayDaily) * 100).toFixed(2) : 0;
             const isPositive = change >= 0;
             
-            let tracksHtml = '';
+            // Find max track number to determine how many rows to show
+            let maxTrackNumber = 0;
+            const tracksByNumber = {};
+            
             data.tracks.forEach(track => {
-                const trackTodayDaily = track.daily_streams;
-                const trackYesterdayDaily = track.prev_daily_streams || 0;
-                const trackChange = trackTodayDaily - trackYesterdayDaily;
-                const trackPercent = trackYesterdayDaily > 0 ? ((trackChange / trackYesterdayDaily) * 100).toFixed(2) : 0;
-                const trackPositive = trackChange >= 0;
-                
-                tracksHtml += `
-                    <div class="track-row">
-                        <div class="track-name">${escapeHtml(track.track_name)}</div>
-                        <div>${formatNumber(trackTodayDaily)}</div>
-                        <div>${formatNumber(track.total_streams)}</div>
-                        <div class="track-change ${trackPositive ? 'positive' : 'negative'}">
-                            ${trackPositive ? '+' : ''}${formatNumber(trackChange)}
-                        </div>
-                        <div class="track-percent ${trackPositive ? 'positive' : 'negative'}">
-                            ${trackPositive ? '+' : ''}${trackPercent}%
-                        </div>
-                    </div>
-                `;
+                const trackNum = parseInt(track.track_number);
+                if (trackNum > maxTrackNumber) maxTrackNumber = trackNum;
+                tracksByNumber[trackNum] = track;
             });
+            
+            // Build track rows with gaps filled
+            let tracksHtml = '';
+            for (let i = 1; i <= maxTrackNumber; i++) {
+                const track = tracksByNumber[i];
+                
+                if (track) {
+                    const trackTodayDaily = track.daily_streams;
+                    const trackYesterdayDaily = track.prev_daily_streams || 0;
+                    const trackChange = trackTodayDaily - trackYesterdayDaily;
+                    const trackPercent = trackYesterdayDaily > 0 ? ((trackChange / trackYesterdayDaily) * 100).toFixed(2) : 0;
+                    const trackPositive = trackChange >= 0;
+                    
+                    tracksHtml += `
+                        <div class="track-row">
+                            <div class="track-number">${i}</div>
+                            <div class="track-name">${escapeHtml(track.track_name)}</div>
+                            <div>${formatNumber(trackTodayDaily)}</div>
+                            <div>${formatNumber(track.total_streams)}</div>
+                            <div class="track-change ${trackPositive ? 'positive' : 'negative'}">
+                                ${trackPositive ? '+' : ''}${formatNumber(trackChange)}
+                            </div>
+                            <div class="track-percent ${trackPositive ? 'positive' : 'negative'}">
+                                ${trackPositive ? '+' : ''}${trackPercent}%
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // Empty row for missing track
+                    tracksHtml += `
+                        <div class="track-row empty">
+                            <div class="track-number">${i}</div>
+                            <div class="track-name"></div>
+                            <div></div>
+                            <div></div>
+                            <div></div>
+                            <div></div>
+                        </div>
+                    `;
+                }
+            }
             
             const html = `
                 <div class="album-card-header">
@@ -792,6 +830,7 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
                 </div>
                 <div class="album-tracks">
                     <div class="tracks-header">
+                        <div>#</div>
                         <div>Song</div>
                         <div>Daily</div>
                         <div>Total</div>
@@ -871,7 +910,9 @@ $types = $conn->query($typesQuery)->fetch_all(MYSQLI_ASSOC);
                 scale: 2,
                 logging: true,
                 useCORS: true,
-                allowTaint: false
+                allowTaint: false,
+                windowHeight: card.scrollHeight,
+                height: card.scrollHeight
             }).then(canvas => {
                 console.log('Canvas created successfully');
                 // Restore buttons

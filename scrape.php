@@ -66,6 +66,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
         if (empty($tracks)) {
             $logMessage .= "No tracks found in database. Please add tracks first.\n";
         } else {
+            $streamDataBatch = [];
+            $failedTracks = [];
+            
             foreach ($tracks as $track) {
                 $trackId = $track['track_id'];
                 $trackName = $track['track_name'];
@@ -84,67 +87,111 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                     ]
                 ];
                 
-                // Make cURL request
-                $ch = curl_init();
-                curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v2/query");
-                curl_setopt($ch, CURLOPT_POST, true);
-                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($graphqlQuery));
-                curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-                curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+                // Retry logic: up to 3 attempts
+                $maxRetries = 3;
+                $success = false;
+                $streamCount = 0;
+                $lastHttpCode = 0;
                 
-                $response = curl_exec($ch);
-                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_close($ch);
-                
-                if ($httpCode == 200 && $response) {
-                    $data = json_decode($response, true);
+                for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+                    // Make cURL request
+                    $ch = curl_init();
+                    curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v2/query");
+                    curl_setopt($ch, CURLOPT_POST, true);
+                    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($graphqlQuery));
+                    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
                     
-                    // Extract playcount
-                    $streamCount = 0;
-                    if (isset($data['data']['trackUnion']['playcount'])) {
-                        $streamCount = intval($data['data']['trackUnion']['playcount']);
-                    }
+                    $response = curl_exec($ch);
+                    $lastHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                    curl_close($ch);
                     
-                    if ($streamCount > 0) {
-                        // Insert into streams table: track_id, stream_date, stream_count
-                        if (insertStreamData($trackId, $date, $streamCount)) {
+                    if ($lastHttpCode == 200 && $response) {
+                        $data = json_decode($response, true);
+                        
+                        // Extract playcount
+                        if (isset($data['data']['trackUnion']['playcount'])) {
+                            $streamCount = intval($data['data']['trackUnion']['playcount']);
+                        }
+                        
+                        if ($streamCount > 0) {
+                            // Store data for batch insert
+                            $streamDataBatch[] = [
+                                'track_id' => $trackId,
+                                'track_name' => $trackName,
+                                'stream_count' => $streamCount
+                            ];
+                            
                             $msg = $trackName . " -> [" . number_format($streamCount) . "]\n";
                             $logMessage .= $msg;
                             if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
                             $successCount++;
+                            $success = true;
+                            break; // Success, exit retry loop
                         } else {
-                            $msg = "❌ " . $trackName . " -> DB Error\n";
+                            $msg = "⚠️ " . $trackName . " -> No playcount data\n";
                             $logMessage .= $msg;
                             if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
                             $errorCount++;
+                            $success = true;
+                            break; // No data but response OK, exit retry loop
                         }
-                    } else {
-                        $msg = "⚠️ " . $trackName . " -> No playcount data\n";
+                    } else if ($lastHttpCode == 401) {
+                        // Token expired, no point retrying
+                        $msg = "❌ " . $trackName . " -> Token expired! (HTTP 401)\n";
                         $logMessage .= $msg;
                         if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
                         $errorCount++;
+                        $failedTracks[] = $trackId;
+                        $success = true; // Don't retry on auth error
+                        break;
+                    } else {
+                        // Retry for other errors
+                        if ($attempt < $maxRetries) {
+                            usleep(500000); // 0.5s delay before retry
+                        }
                     }
-                } else {
-                    $msg = "❌ " . $trackName . " -> API Error (HTTP " . $httpCode . ")\n";
-                    $logMessage .= $msg;
-                    if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
-                    if ($httpCode == 401) {
-                        $msg = "   → Token expired! Get new tokens from Spotify Web Player\n";
-                        $logMessage .= $msg;
-                        if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
-                    }
-                    $errorCount++;
                 }
                 
-                usleep(10000); // 100ms delay
+                // If all retries failed
+                if (!$success) {
+                    $msg = "❌ " . $trackName . " -> API Error after " . $maxRetries . " attempts (HTTP " . $lastHttpCode . ")\n";
+                    $logMessage .= $msg;
+                    if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
+                    $errorCount++;
+                    $failedTracks[] = $trackId;
+                }
+            }
+            
+            // Batch insert all collected stream data
+            if (!empty($streamDataBatch)) {
+                $insertMsg = "\n💾 Inserting " . count($streamDataBatch) . " tracks to database...\n";
+                $logMessage .= $insertMsg;
+                if ($useRealTimeLogging) { echo htmlspecialchars($insertMsg); ob_flush(); flush(); }
+                
+                if (batchInsertStreamData($streamDataBatch, $date)) {
+                    $insertSuccessMsg = "✅ Batch insert completed successfully\n";
+                    $logMessage .= $insertSuccessMsg;
+                    if ($useRealTimeLogging) { echo htmlspecialchars($insertSuccessMsg); ob_flush(); flush(); }
+                } else {
+                    $insertErrorMsg = "❌ Batch insert failed!\n";
+                    $logMessage .= $insertErrorMsg;
+                    if ($useRealTimeLogging) { echo htmlspecialchars($insertErrorMsg); ob_flush(); flush(); }
+                }
             }
         }
         
             $summary = "\n=== Streams Summary ===\n";
             $summary .= "✅ Success: " . $successCount . " tracks\n";
             $summary .= "❌ Errors: " . $errorCount . " tracks\n";
+            if (!empty($failedTracks)) {
+                $summary .= "\n🔴 Failed Track IDs:\n";
+                foreach ($failedTracks as $failedId) {
+                    $summary .= "   - " . $failedId . "\n";
+                }
+            }
             $logMessage .= $summary;
             if ($useRealTimeLogging) { echo htmlspecialchars($summary); ob_flush(); flush(); }
         }
@@ -165,6 +212,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
             } else {
                 $statsSuccessCount = 0;
                 $statsErrorCount = 0;
+                $statsDataBatch = [];
+                $failedArtists = [];
                 
                 foreach ($artists as $artist) {
                     $artistId = $artist['artist_id'];
@@ -186,75 +235,123 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                             ]
                         ];
                         
-                        // Make cURL request
-                        $ch = curl_init();
-                        curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v2/query");
-                        curl_setopt($ch, CURLOPT_POST, true);
-                        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($graphqlQuery));
-                        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-                        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-                        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+                        // Retry logic: up to 3 attempts
+                        $maxRetries = 3;
+                        $success = false;
+                        $lastHttpCode = 0;
+                        $monthlyListeners = 0;
+                        $followers = 0;
                         
-                        $response = curl_exec($ch);
-                        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                        curl_close($ch);
-                        
-                        if ($httpCode == 200 && $response) {
-                            $data = json_decode($response, true);
+                        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
+                            // Make cURL request
+                            $ch = curl_init();
+                            curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v2/query");
+                            curl_setopt($ch, CURLOPT_POST, true);
+                            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($graphqlQuery));
+                            curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+                            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+                            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
                             
-                            // Extract stats
-                            $monthlyListeners = 0;
-                            $followers = 0;
+                            $response = curl_exec($ch);
+                            $lastHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                            curl_close($ch);
                             
-                            if (isset($data['data']['artistUnion']['stats'])) {
-                                $stats = $data['data']['artistUnion']['stats'];
-                                $monthlyListeners = $stats['monthlyListeners'] ?? 0;
-                                $followers = $stats['followers'] ?? 0;
-                            }
-                            
-                            if ($monthlyListeners > 0 || $followers > 0) {
-                                $conn = getDBConnection();
-                                $stmt = $conn->prepare("INSERT INTO artist_stats (artist_id, stat_date, monthly_listeners, followers) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE monthly_listeners = VALUES(monthly_listeners), followers = VALUES(followers)");
-                                $stmt->bind_param("ssii", $artistId, $date, $monthlyListeners, $followers);
-                                $stmt->execute();
+                            if ($lastHttpCode == 200 && $response) {
+                                $data = json_decode($response, true);
                                 
-                                $statsMsg = "✅ " . $artistName . " -> ML: " . number_format($monthlyListeners) . ", Followers: " . number_format($followers) . "\n";
-                                $logMessage .= $statsMsg;
-                                if ($useRealTimeLogging) { echo htmlspecialchars($statsMsg); ob_flush(); flush(); }
+                                // Extract stats
+                                if (isset($data['data']['artistUnion']['stats'])) {
+                                    $stats = $data['data']['artistUnion']['stats'];
+                                    $monthlyListeners = $stats['monthlyListeners'] ?? 0;
+                                    $followers = $stats['followers'] ?? 0;
+                                }
                                 
-                                $stmt->close();
-                                $conn->close();
-                                $statsSuccessCount++;
-                            } else {
-                                $errMsg = "⚠️ " . $artistName . " -> No stats data\n";
+                                if ($monthlyListeners > 0 || $followers > 0) {
+                                    // Store data for batch insert
+                                    $statsDataBatch[] = [
+                                        'artist_id' => $artistId,
+                                        'artist_name' => $artistName,
+                                        'monthly_listeners' => $monthlyListeners,
+                                        'followers' => $followers
+                                    ];
+                                    
+                                    $statsMsg = "✅ " . $artistName . " -> ML: " . number_format($monthlyListeners) . ", Followers: " . number_format($followers) . "\n";
+                                    $logMessage .= $statsMsg;
+                                    if ($useRealTimeLogging) { echo htmlspecialchars($statsMsg); ob_flush(); flush(); }
+                                    
+                                    $statsSuccessCount++;
+                                    $success = true;
+                                    break; // Success, exit retry loop
+                                } else {
+                                    $errMsg = "⚠️ " . $artistName . " -> No stats data\n";
+                                    $logMessage .= $errMsg;
+                                    if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
+                                    $statsErrorCount++;
+                                    $success = true;
+                                    break; // No data but response OK, exit retry loop
+                                }
+                            } else if ($lastHttpCode == 401) {
+                                // Token expired, no point retrying
+                                $errMsg = "❌ " . $artistName . " -> Token expired! (HTTP 401)\n";
                                 $logMessage .= $errMsg;
                                 if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
                                 $statsErrorCount++;
+                                $failedArtists[] = $artistId;
+                                $success = true; // Don't retry on auth error
+                                break;
+                            } else {
+                                // Retry for other errors
+                                if ($attempt < $maxRetries) {
+                                    usleep(500000); // 0.5s delay before retry
+                                }
                             }
-                        } else {
-                            $errMsg = "❌ " . $artistName . " -> API Error (HTTP " . $httpCode . ")\n";
-                            if ($httpCode == 401) {
-                                $errMsg .= "   → Token expired! Get new tokens from Spotify Web Player\n";
-                            }
+                        }
+                        
+                        // If all retries failed
+                        if (!$success) {
+                            $errMsg = "❌ " . $artistName . " -> API Error after " . $maxRetries . " attempts (HTTP " . $lastHttpCode . ")\n";
                             $logMessage .= $errMsg;
                             if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
                             $statsErrorCount++;
+                            $failedArtists[] = $artistId;
                         }
-                        
-                        usleep(100000); // 100ms delay between artists
                         
                     } catch (Exception $e) {
                         $errMsg = "❌ " . $artistName . " -> Error: " . $e->getMessage() . "\n";
                         $logMessage .= $errMsg;
                         if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
                         $statsErrorCount++;
+                        $failedArtists[] = $artistId;
+                    }
+                }
+                
+                // Batch insert all collected artist stats
+                if (!empty($statsDataBatch)) {
+                    $insertMsg = "\n💾 Inserting " . count($statsDataBatch) . " artists stats to database...\n";
+                    $logMessage .= $insertMsg;
+                    if ($useRealTimeLogging) { echo htmlspecialchars($insertMsg); ob_flush(); flush(); }
+                    
+                    if (batchInsertArtistStats($statsDataBatch, $date)) {
+                        $insertSuccessMsg = "✅ Batch insert completed successfully\n";
+                        $logMessage .= $insertSuccessMsg;
+                        if ($useRealTimeLogging) { echo htmlspecialchars($insertSuccessMsg); ob_flush(); flush(); }
+                    } else {
+                        $insertErrorMsg = "❌ Batch insert failed!\n";
+                        $logMessage .= $insertErrorMsg;
+                        if ($useRealTimeLogging) { echo htmlspecialchars($insertErrorMsg); ob_flush(); flush(); }
                     }
                 }
                 
                 $statsSummary = "\n=== Stats Summary ===\n";
                 $statsSummary .= "✅ Success: " . $statsSuccessCount . " artists\n";
                 $statsSummary .= "❌ Errors: " . $statsErrorCount . " artists\n";
+                if (!empty($failedArtists)) {
+                    $statsSummary .= "\n🔴 Failed Artist IDs:\n";
+                    foreach ($failedArtists as $failedId) {
+                        $statsSummary .= "   - " . $failedId . "\n";
+                    }
+                }
                 $logMessage .= $statsSummary;
                 if ($useRealTimeLogging) { echo htmlspecialchars($statsSummary); ob_flush(); flush(); }
             }
@@ -302,6 +399,62 @@ function insertStreamData($trackId, $streamDate, $streamCount) {
         $conn->close();
         return $success;
     } catch (Exception $e) {
+        return false;
+    }
+}
+
+// Helper function to batch insert stream data
+function batchInsertStreamData($streamDataBatch, $streamDate) {
+    if (empty($streamDataBatch)) return true;
+    
+    try {
+        $conn = getDBConnection();
+        $conn->begin_transaction();
+        
+        $stmt = $conn->prepare("INSERT INTO streams (track_id, stream_date, stream_count) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE stream_count = VALUES(stream_count)");
+        
+        foreach ($streamDataBatch as $data) {
+            $stmt->bind_param("ssi", $data['track_id'], $streamDate, $data['stream_count']);
+            $stmt->execute();
+        }
+        
+        $conn->commit();
+        $stmt->close();
+        $conn->close();
+        return true;
+    } catch (Exception $e) {
+        if (isset($conn)) {
+            $conn->rollback();
+            $conn->close();
+        }
+        return false;
+    }
+}
+
+// Helper function to batch insert artist stats
+function batchInsertArtistStats($statsDataBatch, $statDate) {
+    if (empty($statsDataBatch)) return true;
+    
+    try {
+        $conn = getDBConnection();
+        $conn->begin_transaction();
+        
+        $stmt = $conn->prepare("INSERT INTO artist_stats (artist_id, stat_date, monthly_listeners, followers) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE monthly_listeners = VALUES(monthly_listeners), followers = VALUES(followers)");
+        
+        foreach ($statsDataBatch as $data) {
+            $stmt->bind_param("ssii", $data['artist_id'], $statDate, $data['monthly_listeners'], $data['followers']);
+            $stmt->execute();
+        }
+        
+        $conn->commit();
+        $stmt->close();
+        $conn->close();
+        return true;
+    } catch (Exception $e) {
+        if (isset($conn)) {
+            $conn->rollback();
+            $conn->close();
+        }
         return false;
     }
 }

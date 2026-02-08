@@ -1172,18 +1172,25 @@ function getArtists() {
 function getDailyStreamsChart($days = 7, $filter = '0Sadg1vgvaPqGTOjxu0N6c') {
     try {
         $conn = getDBConnection();
-        
+
+        // Use latest available date as reference (handles historic datasets)
+        $latestDate = getLatestStreamDate();
+        if (!$latestDate) return ['labels' => [], 'data' => []];
+
+        // Calculate start date (inclusive)
+        $startDate = date('Y-m-d', strtotime($latestDate . " - " . ($days - 1) . " days"));
+
         if ($filter === 'all') {
             // Get ALL tracks (no artist filter)
             $sql = "
                 SELECT stream_date, SUM(stream_count) as total
                 FROM streams
-                WHERE stream_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+                WHERE stream_date BETWEEN ? AND ?
                 GROUP BY stream_date
                 ORDER BY stream_date ASC
             ";
             $stmt = $conn->prepare($sql);
-            $stmt->bind_param('i', $days);
+            $stmt->bind_param('ss', $startDate, $latestDate);
             $stmt->execute();
         } else {
             // Build query based on filter type
@@ -1191,95 +1198,216 @@ function getDailyStreamsChart($days = 7, $filter = '0Sadg1vgvaPqGTOjxu0N6c') {
             if (empty($artistIds)) {
                 return ['labels' => [], 'data' => []];
             }
-            
+
             $placeholders = str_repeat('?,', count($artistIds) - 1) . '?';
-            
+
             $sql = "
                 SELECT s.stream_date, SUM(s.stream_count) as total
                 FROM streams s
                 JOIN track_artist ta ON s.track_id = ta.track_id
                 WHERE ta.artist_id IN ($placeholders)
-                AND s.stream_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+                AND s.stream_date BETWEEN ? AND ?
                 GROUP BY s.stream_date
                 ORDER BY s.stream_date ASC
             ";
-            
-            $params = array_merge($artistIds, [$days]);
-            $types = str_repeat('s', count($artistIds)) . 'i';
-            
+
+            $params = array_merge($artistIds, [$startDate, $latestDate]);
+            $types = str_repeat('s', count($artistIds)) . 'ss';
+
             $stmt = $conn->prepare($sql);
             $stmt->bind_param($types, ...$params);
             $stmt->execute();
         }
+
         $result = $stmt->get_result();
-        
-        $labels = [];
-        $data = [];
-        $rawData = [];
-        
+
+        // Build associative map of date => total
+        $totalsByDate = [];
         while ($row = $result->fetch_assoc()) {
-            $labels[] = date('j/n', strtotime($row['stream_date']));
-            $rawData[] = $row['total'];
+            $totalsByDate[$row['stream_date']] = intval($row['total']);
         }
-        
-        // Calculate daily increases for ALL data points DULU
-        // i=0 (oldest): tidak punya data kemarin, jadi tidak valid sebagai daily stream
-        // i=1, i=2, dst: daily increase yang valid (today - yesterday)
-        for ($i = 0; $i < count($rawData); $i++) {
+
+        // Fill full date range from startDate to latestDate
+        $labels = [];
+        $rawTotals = [];
+        $current = strtotime($startDate);
+        $end = strtotime($latestDate);
+        while ($current <= $end) {
+            $d = date('Y-m-d', $current);
+            $labels[] = date('j/n', strtotime($d));
+            $rawTotals[] = $totalsByDate[$d] ?? 0;
+            $current = strtotime('+1 day', $current);
+        }
+
+        // Compute daily increases: for i>0: rawTotals[i] - rawTotals[i-1]
+        $data = [];
+        for ($i = 0; $i < count($rawTotals); $i++) {
             if ($i == 0) {
-                // For first/oldest day, get cumulative total up to that day
-                // Ini tidak valid sebagai daily stream karena tidak ada data kemarin
+                // first point: cumulative up to that day
+                // compute cumulative total up to that date for the filter
                 if ($filter === 'all') {
-                    // For 'all' filter, no artist join needed
-                    $sql_cum = "
-                        SELECT SUM(stream_count) as cumulative
-                        FROM streams
-                        WHERE stream_date <= (
-                            SELECT MIN(stream_date) 
-                            FROM streams 
-                            WHERE stream_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
-                        )
-                    ";
-                    $stmt2 = $conn->prepare($sql_cum);
-                    $stmt2->bind_param('i', $days);
+                    $stmt2 = $conn->prepare("SELECT SUM(stream_count) as cumulative FROM streams WHERE stream_date <= ?");
+                    $stmt2->bind_param('s', $startDate);
                 } else {
-                    // For artist-specific filters
-                    $sql_cum = "
-                        SELECT SUM(s.stream_count) as cumulative
-                        FROM streams s
-                        JOIN track_artist ta ON s.track_id = ta.track_id
-                        WHERE ta.artist_id IN ($placeholders)
-                        AND s.stream_date <= (
-                            SELECT MIN(stream_date) 
-                            FROM streams 
-                            WHERE stream_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
-                        )
-                    ";
+                    // For artist-specific filters, sum joined by track_artist
+                    $placeholders = str_repeat('?,', count($artistIds) - 1) . '?';
+                    $sql_cum = "SELECT SUM(s.stream_count) as cumulative FROM streams s JOIN track_artist ta ON s.track_id = ta.track_id WHERE ta.artist_id IN ($placeholders) AND s.stream_date <= ?";
+                    $paramsCum = array_merge($artistIds, [$startDate]);
+                    $typesCum = str_repeat('s', count($artistIds)) . 's';
                     $stmt2 = $conn->prepare($sql_cum);
-                    $stmt2->bind_param($types, ...$params);
+                    $stmt2->bind_param($typesCum, ...$paramsCum);
                 }
+                // Note: using startDate as boundary for cumulative
                 $stmt2->execute();
                 $res2 = $stmt2->get_result();
                 $cumData = $res2->fetch_assoc();
-                $data[] = $cumData['cumulative'] ?? 0;
+                $data[] = intval($cumData['cumulative'] ?? 0);
                 $stmt2->close();
             } else {
-                $data[] = $rawData[$i] - $rawData[$i - 1]; // Daily increase
+                $data[] = $rawTotals[$i] - $rawTotals[$i - 1];
             }
         }
-        
-        // SETELAH semua dihitung, hapus data point TERLAMA (oldest/index 0)
-        // Karena data terlama tidak punya data kemarin untuk dibandingkan
-        // Jadi bukan daily stream yang akurat
+
+        // Remove oldest point (first) since it is cumulative not a daily increase
         if (count($data) > 0) {
-            array_shift($data);    // Hapus data TERLAMA (oldest)
-            array_shift($labels);  // Hapus label TERLAMA (oldest)
+            array_shift($data);
+            array_shift($labels);
         }
-        
+
+        // Exclude non-positive points (<=0) and outliers (>100,000,000).
+        // If a point is negative (<0), also exclude the following day.
+        $n = count($data);
+        $include = array_fill(0, $n, true);
+        for ($i = 0; $i < $n; $i++) {
+            if ($data[$i] <= 0 || $data[$i] > 100000000) {
+                $include[$i] = false;
+            }
+            if ($data[$i] < 0 && ($i + 1) < $n) {
+                $include[$i + 1] = false;
+            }
+        }
+
+        $filteredLabels = [];
+        $filteredData = [];
+        for ($i = 0; $i < $n; $i++) {
+            if ($include[$i]) {
+                $filteredLabels[] = $labels[$i];
+                $filteredData[] = $data[$i];
+            }
+        }
+
         $stmt->close();
         $conn->close();
-        
-        return ['labels' => $labels, 'data' => $data];
+
+        return ['labels' => $filteredLabels, 'data' => $filteredData];
+    } catch (Exception $e) {
+        return ['labels' => [], 'data' => []];
+    }
+}
+
+// Get daily streams chart for an explicit date range (inclusive)
+function getDailyStreamsChartRange($startDate, $endDate, $filter = '0Sadg1vgvaPqGTOjxu0N6c') {
+    try {
+        $conn = getDBConnection();
+        if (!$startDate || !$endDate) return ['labels' => [], 'data' => []];
+
+        // to compute the daily increase for the user's chosen start date,
+        // include the previous day in the query window (startDate - 1 day)
+        $prevDate = date('Y-m-d', strtotime($startDate . ' -1 day'));
+
+        if ($filter === 'all') {
+            $sql = "
+                SELECT stream_date, SUM(stream_count) as total
+                FROM streams
+                WHERE stream_date BETWEEN ? AND ?
+                GROUP BY stream_date
+                ORDER BY stream_date ASC
+            ";
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param('ss', $prevDate, $endDate);
+            $stmt->execute();
+        } else {
+            $artistIds = getArtistIdsByFilter($filter);
+            if (empty($artistIds)) {
+                return ['labels' => [], 'data' => []];
+            }
+
+            $placeholders = str_repeat('?,', count($artistIds) - 1) . '?';
+            $sql = "
+                SELECT s.stream_date, SUM(s.stream_count) as total
+                FROM streams s
+                JOIN track_artist ta ON s.track_id = ta.track_id
+                WHERE ta.artist_id IN ($placeholders)
+                AND s.stream_date BETWEEN ? AND ?
+                GROUP BY s.stream_date
+                ORDER BY s.stream_date ASC
+            ";
+
+            $params = array_merge($artistIds, [$prevDate, $endDate]);
+            $types = str_repeat('s', count($artistIds)) . 'ss';
+
+            $stmt = $conn->prepare($sql);
+            $stmt->bind_param($types, ...$params);
+            $stmt->execute();
+        }
+
+        $result = $stmt->get_result();
+
+        $totalsByDate = [];
+        while ($row = $result->fetch_assoc()) {
+            $totalsByDate[$row['stream_date']] = intval($row['total']);
+        }
+
+        // Build rawTotals starting from prevDate up to endDate
+        $dates = [];
+        $rawTotals = [];
+        $current = strtotime($prevDate);
+        $end = strtotime($endDate);
+        while ($current <= $end) {
+            $d = date('Y-m-d', $current);
+            $dates[] = $d;
+            $rawTotals[] = $totalsByDate[$d] ?? 0;
+            $current = strtotime('+1 day', $current);
+        }
+
+        // Now compute daily increases for dates from startDate..endDate
+        $labels = [];
+        $data = [];
+        for ($i = 1; $i < count($rawTotals); $i++) {
+            $labelDate = $dates[$i];
+            // only include labels within user-chosen window (i.e., dates >= startDate)
+            if ($labelDate < $startDate) continue;
+            $daily = $rawTotals[$i] - $rawTotals[$i - 1];
+            $labels[] = date('j/n', strtotime($labelDate));
+            $data[] = intval($daily);
+        }
+
+        // Exclude non-positive points (<=0) and outliers (>100,000,000).
+        // If a point is negative (<0), also exclude the following day.
+        $n = count($data);
+        $include = array_fill(0, $n, true);
+        for ($i = 0; $i < $n; $i++) {
+            if ($data[$i] <= 0 || $data[$i] > 100000000) {
+                $include[$i] = false;
+            }
+            if ($data[$i] < 0 && ($i + 1) < $n) {
+                $include[$i + 1] = false;
+            }
+        }
+
+        $filteredLabels = [];
+        $filteredData = [];
+        for ($i = 0; $i < $n; $i++) {
+            if ($include[$i]) {
+                $filteredLabels[] = $labels[$i];
+                $filteredData[] = $data[$i];
+            }
+        }
+
+        $stmt->close();
+        $conn->close();
+
+        return ['labels' => $filteredLabels, 'data' => $filteredData];
     } catch (Exception $e) {
         return ['labels' => [], 'data' => []];
     }

@@ -9,6 +9,14 @@ if (!$latestDate) $latestDate = date('Y-m-d');
 // Get filter from URL
 $filter = $_GET['filter'] ?? '0Sadg1vgvaPqGTOjxu0N6c'; // Default to Girls' Generation artist_id
 
+// Date range selector: use explicit start/end dates. Default = current month
+$startDate = $_GET['start'] ?? date('Y-m-01');
+$endDate = $_GET['end'] ?? date('Y-m-t');
+
+// sanitize simple format (YYYY-MM-DD)
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $startDate)) $startDate = date('Y-m-01');
+if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $endDate)) $endDate = date('Y-m-t');
+
 // Get stats based on filter
 $dailyComparison = getDailyStreamsComparisonByFilter($filter);
 $dailyStreams = $dailyComparison['current'];
@@ -33,9 +41,6 @@ if ($isMultiProfile) {
 
 // Get total streams
 $totalStreams = getTotalStreamsByFilter($filter);
-
-// Get filter from URL
-$filter = $_GET['filter'] ?? '0Sadg1vgvaPqGTOjxu0N6c'; // Default to Girls' Generation artist_id
 
 // Get top 5 tracks DAILY INCREASE
 $topTracksDaily = getTopTracksDailyIncrease(5, $filter);
@@ -80,13 +85,13 @@ foreach ($topArtistsAllTime as $artist) {
     ];
 }
 
-// Get chart data for current month
-$chartData = getDailyStreamsChart(31, $filter);
+// Get chart data for selected date range
+$chartData = getDailyStreamsChartRange($startDate, $endDate, $filter);
 
 // Get all artists for filter dropdown
 $allArtists = getArtistList();
 
-$currentMonth = date('F Y');
+$currentMonth = (date('Y-m', strtotime($startDate)) === date('Y-m', strtotime($endDate))) ? date('F Y', strtotime($startDate)) : date('d M Y', strtotime($startDate)) . ' - ' . date('d M Y', strtotime($endDate));
 $displayDate = date('d M Y', strtotime($latestDate));
 
 // Function to darken color for table header
@@ -310,11 +315,14 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
             <div class="chart-section">
                 <div class="chart-header">
                     <h3>Daily Streams of <?php echo $currentMonth; ?></h3>
-                    <select onchange="location.href='dashboard.php?month='+this.value">
-                        <option value="01-2026">January 2026</option>
-                        <option value="12-2025">December 2025</option>
-                        <option value="11-2025">November 2025</option>
-                    </select>
+                    <form method="get" class="date-filter" style="display:inline-flex; align-items:center; gap:8px; margin-left:12px;">
+                        <input type="hidden" name="filter" value="<?php echo htmlspecialchars($filter); ?>">
+                        <label style="font-size:12px; color:#9CA3AF; margin-right:6px;">From</label>
+                        <input id="startDate" class="input-date" type="date" name="start" value="<?php echo htmlspecialchars($startDate); ?>" style="padding:6px 8px; border-radius:6px; border:1px solid rgba(0,0,0,0.08);">
+                        <label style="font-size:12px; color:#9CA3AF; margin:0 6px;">To</label>
+                        <input id="endDate" class="input-date" type="date" name="end" value="<?php echo htmlspecialchars($endDate); ?>" style="padding:6px 8px; border-radius:6px; border:1px solid rgba(0,0,0,0.08);">
+                        <button type="submit" class="download-btn" style="padding:6px 10px; font-size:13px;">Apply</button>
+                    </form>
                 </div>
                 <div class="chart-container">
                     <canvas id="streamsChart"></canvas>
@@ -410,6 +418,13 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
         gradient.addColorStop(0, 'rgba(59, 130, 246, 0.3)');
         gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
 
+        // compute y-axis minimum: lowest data point - 20k (if data exists)
+        let yMin = undefined;
+        if (chartData.data && chartData.data.length > 0) {
+            const minVal = Math.min(...chartData.data.map(v => Number(v)));
+            yMin = minVal - 20000;
+        }
+
         new Chart(ctx, {
             type: 'line',
             data: {
@@ -449,7 +464,8 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
                 },
                 scales: {
                     y: {
-                        beginAtZero: true,
+                        beginAtZero: false,
+                        min: (typeof yMin !== 'undefined') ? yMin : undefined,
                         grid: { color: 'rgba(0, 0, 0, 0.05)' },
                         ticks: {
                             color: '#9CA3AF',
@@ -688,6 +704,33 @@ $cardHeaderColor = darkenColor($cardBgColor1, 35);
                 btn.disabled = false;
             });
         }
+    </script>
+    <script>
+        // Auto-set end date to one month after start date (when start changes)
+        (function(){
+            const startEl = document.getElementById('startDate');
+            const endEl = document.getElementById('endDate');
+            if (!startEl || !endEl) return;
+
+            function setDefaultEndFromStart() {
+                const s = startEl.value;
+                if (!s) return;
+                const sd = new Date(s + 'T00:00:00');
+                const ed = new Date(sd);
+                // add one month
+                ed.setMonth(ed.getMonth() + 1);
+                // subtract one day to make it a one-month range
+                ed.setDate(ed.getDate() - 1);
+                const yyyy = ed.getFullYear();
+                const mm = String(ed.getMonth() + 1).padStart(2, '0');
+                const dd = String(ed.getDate()).padStart(2, '0');
+                endEl.value = `${yyyy}-${mm}-${dd}`;
+            }
+
+            startEl.addEventListener('change', setDefaultEndFromStart);
+            // also run once on load in case user cleared end
+            window.addEventListener('load', setDefaultEndFromStart);
+        })();
     </script>
 </body>
 </html>

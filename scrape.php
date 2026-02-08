@@ -45,6 +45,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
             flush();
         }
         
+        // Close session to prevent locking during long-running process
+        session_write_close();
+        
         // Prepare headers
         $headers = [
             "authorization: Bearer " . $authBearer,
@@ -52,7 +55,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
             "content-type: application/json;charset=UTF-8",
             "origin: https://open.spotify.com",
             "referer: https://open.spotify.com/",
-            "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+            "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+            "Connection: keep-alive"
         ];
         
         $successCount = 0;
@@ -68,8 +72,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
         } else {
             $streamDataBatch = [];
             $failedTracks = [];
+            $logBuffer = "";
+            $bufferCount = 0;
+            $startTime = microtime(true);
             
-            foreach ($tracks as $track) {
+            // Setup single cURL handle for reuse (connection keep-alive)
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v2/query");
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+            curl_setopt($ch, CURLOPT_FORBID_REUSE, false); // Allow connection reuse
+            curl_setopt($ch, CURLOPT_DNS_CACHE_TIMEOUT, 3600); // Cache DNS for 1 hour
+            curl_setopt($ch, CURLOPT_TCP_KEEPALIVE, 1);
+            
+            foreach ($tracks as $index => $track) {
                 $trackId = $track['track_id'];
                 $trackName = $track['track_name'];
                 
@@ -92,21 +111,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                 $success = false;
                 $streamCount = 0;
                 $lastHttpCode = 0;
+                $requestStart = microtime(true);
                 
                 for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-                    // Make cURL request
-                    $ch = curl_init();
-                    curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v2/query");
-                    curl_setopt($ch, CURLOPT_POST, true);
+                    // Reuse cURL handle - only update payload
                     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($graphqlQuery));
-                    curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-                    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-                    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
                     
                     $response = curl_exec($ch);
                     $lastHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                    curl_close($ch);
+                    $requestTime = round((microtime(true) - $requestStart) * 1000, 2);
                     
                     if ($lastHttpCode == 200 && $response) {
                         $data = json_decode($response, true);
@@ -124,25 +137,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                                 'stream_count' => $streamCount
                             ];
                             
-                            $msg = $trackName . " -> [" . number_format($streamCount) . "]\n";
+                            $msg = $trackName . " -> [" . number_format($streamCount) . "] ({$requestTime}ms)\n";
                             $logMessage .= $msg;
-                            if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
+                            $logBuffer .= $msg;
+                            $bufferCount++;
+                            
+                            // Flush buffer every 20 items for performance
+                            if ($useRealTimeLogging && $bufferCount >= 20) {
+                                echo htmlspecialchars($logBuffer);
+                                ob_flush();
+                                flush();
+                                $logBuffer = "";
+                                $bufferCount = 0;
+                            }
                             $successCount++;
                             $success = true;
                             break; // Success, exit retry loop
                         } else {
-                            $msg = "⚠️ " . $trackName . " -> No playcount data\n";
+                            $msg = "⚠️ " . $trackName . " -> No playcount data ({$requestTime}ms)\n";
                             $logMessage .= $msg;
-                            if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
+                            $logBuffer .= $msg;
+                            $bufferCount++;
+                            if ($useRealTimeLogging && $bufferCount >= 20) {
+                                echo htmlspecialchars($logBuffer); ob_flush(); flush();
+                                $logBuffer = ""; $bufferCount = 0;
+                            }
                             $errorCount++;
                             $success = true;
                             break; // No data but response OK, exit retry loop
                         }
                     } else if ($lastHttpCode == 401) {
                         // Token expired, no point retrying
-                        $msg = "❌ " . $trackName . " -> Token expired! (HTTP 401)\n";
+                        $msg = "❌ " . $trackName . " -> Token expired! (HTTP 401) ({$requestTime}ms)\n";
                         $logMessage .= $msg;
-                        if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
+                        $logBuffer .= $msg;
+                        $bufferCount++;
+                        if ($useRealTimeLogging && $bufferCount >= 20) {
+                            echo htmlspecialchars($logBuffer); ob_flush(); flush();
+                            $logBuffer = ""; $bufferCount = 0;
+                        }
                         $errorCount++;
                         $failedTracks[] = $trackId;
                         $success = true; // Don't retry on auth error
@@ -157,13 +190,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                 
                 // If all retries failed
                 if (!$success) {
-                    $msg = "❌ " . $trackName . " -> API Error after " . $maxRetries . " attempts (HTTP " . $lastHttpCode . ")\n";
+                    $totalRetryTime = round((microtime(true) - $requestStart) * 1000, 2);
+                    $msg = "❌ " . $trackName . " -> API Error after " . $maxRetries . " attempts (HTTP " . $lastHttpCode . ") ({$totalRetryTime}ms)\n";
                     $logMessage .= $msg;
-                    if ($useRealTimeLogging) { echo htmlspecialchars($msg); ob_flush(); flush(); }
+                    $logBuffer .= $msg;
+                    $bufferCount++;
+                    if ($useRealTimeLogging && $bufferCount >= 20) {
+                        echo htmlspecialchars($logBuffer); ob_flush(); flush();
+                        $logBuffer = ""; $bufferCount = 0;
+                    }
                     $errorCount++;
                     $failedTracks[] = $trackId;
                 }
             }
+            
+            // Flush any remaining buffered logs
+            if ($useRealTimeLogging && !empty($logBuffer)) {
+                echo htmlspecialchars($logBuffer);
+                ob_flush();
+                flush();
+            }
+            
+            // Close cURL handle after all requests
+            curl_close($ch);
+            
+            $totalTime = round(microtime(true) - $startTime, 2);
+            $avgTime = count($tracks) > 0 ? round($totalTime / count($tracks), 3) : 0;
             
             // Batch insert all collected stream data
             if (!empty($streamDataBatch)) {
@@ -186,6 +238,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
             $summary = "\n=== Streams Summary ===\n";
             $summary .= "✅ Success: " . $successCount . " tracks\n";
             $summary .= "❌ Errors: " . $errorCount . " tracks\n";
+            $summary .= "⏱️ Total Time: {$totalTime}s (avg: {$avgTime}s per track)\n";
             if (!empty($failedTracks)) {
                 $summary .= "\n🔴 Failed Track IDs:\n";
                 foreach ($failedTracks as $failedId) {
@@ -214,6 +267,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                 $statsErrorCount = 0;
                 $statsDataBatch = [];
                 $failedArtists = [];
+                $statsLogBuffer = "";
+                $statsBufferCount = 0;
+                $statsStartTime = microtime(true);
+                
+                // Setup single cURL handle for artists (reuse connection)
+                $chArtist = curl_init();
+                curl_setopt($chArtist, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v2/query");
+                curl_setopt($chArtist, CURLOPT_POST, true);
+                curl_setopt($chArtist, CURLOPT_HTTPHEADER, $headers);
+                curl_setopt($chArtist, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($chArtist, CURLOPT_SSL_VERIFYPEER, false);
+                curl_setopt($chArtist, CURLOPT_TIMEOUT, 30);
+                curl_setopt($chArtist, CURLOPT_FORBID_REUSE, false);
+                curl_setopt($chArtist, CURLOPT_DNS_CACHE_TIMEOUT, 3600);
+                curl_setopt($chArtist, CURLOPT_TCP_KEEPALIVE, 1);
                 
                 foreach ($artists as $artist) {
                     $artistId = $artist['artist_id'];
@@ -241,21 +309,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                         $lastHttpCode = 0;
                         $monthlyListeners = 0;
                         $followers = 0;
+                        $artistRequestStart = microtime(true);
                         
                         for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-                            // Make cURL request
-                            $ch = curl_init();
-                            curl_setopt($ch, CURLOPT_URL, "https://api-partner.spotify.com/pathfinder/v2/query");
-                            curl_setopt($ch, CURLOPT_POST, true);
-                            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($graphqlQuery));
-                            curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-                            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-                            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+                            // Reuse cURL handle - only update payload
+                            curl_setopt($chArtist, CURLOPT_POSTFIELDS, json_encode($graphqlQuery));
                             
-                            $response = curl_exec($ch);
-                            $lastHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                            curl_close($ch);
+                            $response = curl_exec($chArtist);
+                            $lastHttpCode = curl_getinfo($chArtist, CURLINFO_HTTP_CODE);
+                            $artistRequestTime = round((microtime(true) - $artistRequestStart) * 1000, 2);
                             
                             if ($lastHttpCode == 200 && $response) {
                                 $data = json_decode($response, true);
@@ -276,26 +338,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                                         'followers' => $followers
                                     ];
                                     
-                                    $statsMsg = "✅ " . $artistName . " -> ML: " . number_format($monthlyListeners) . ", Followers: " . number_format($followers) . "\n";
+                                    $statsMsg = "✅ " . $artistName . " -> ML: " . number_format($monthlyListeners) . ", Followers: " . number_format($followers) . " ({$artistRequestTime}ms)\n";
                                     $logMessage .= $statsMsg;
-                                    if ($useRealTimeLogging) { echo htmlspecialchars($statsMsg); ob_flush(); flush(); }
+                                    $statsLogBuffer .= $statsMsg;
+                                    $statsBufferCount++;
+                                    if ($useRealTimeLogging && $statsBufferCount >= 20) {
+                                        echo htmlspecialchars($statsLogBuffer); ob_flush(); flush();
+                                        $statsLogBuffer = ""; $statsBufferCount = 0;
+                                    }
                                     
                                     $statsSuccessCount++;
                                     $success = true;
                                     break; // Success, exit retry loop
                                 } else {
-                                    $errMsg = "⚠️ " . $artistName . " -> No stats data\n";
+                                    $errMsg = "⚠️ " . $artistName . " -> No stats data ({$artistRequestTime}ms)\n";
                                     $logMessage .= $errMsg;
-                                    if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
+                                    $statsLogBuffer .= $errMsg;
+                                    $statsBufferCount++;
+                                    if ($useRealTimeLogging && $statsBufferCount >= 20) {
+                                        echo htmlspecialchars($statsLogBuffer); ob_flush(); flush();
+                                        $statsLogBuffer = ""; $statsBufferCount = 0;
+                                    }
                                     $statsErrorCount++;
                                     $success = true;
                                     break; // No data but response OK, exit retry loop
                                 }
                             } else if ($lastHttpCode == 401) {
                                 // Token expired, no point retrying
-                                $errMsg = "❌ " . $artistName . " -> Token expired! (HTTP 401)\n";
+                                $errMsg = "❌ " . $artistName . " -> Token expired! (HTTP 401) ({$artistRequestTime}ms)\n";
                                 $logMessage .= $errMsg;
-                                if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
+                                $statsLogBuffer .= $errMsg;
+                                $statsBufferCount++;
+                                if ($useRealTimeLogging && $statsBufferCount >= 20) {
+                                    echo htmlspecialchars($statsLogBuffer); ob_flush(); flush();
+                                    $statsLogBuffer = ""; $statsBufferCount = 0;
+                                }
                                 $statsErrorCount++;
                                 $failedArtists[] = $artistId;
                                 $success = true; // Don't retry on auth error
@@ -310,9 +387,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                         
                         // If all retries failed
                         if (!$success) {
-                            $errMsg = "❌ " . $artistName . " -> API Error after " . $maxRetries . " attempts (HTTP " . $lastHttpCode . ")\n";
+                            $artistTotalRetryTime = round((microtime(true) - $artistRequestStart) * 1000, 2);
+                            $errMsg = "❌ " . $artistName . " -> API Error after " . $maxRetries . " attempts (HTTP " . $lastHttpCode . ") ({$artistTotalRetryTime}ms)\n";
                             $logMessage .= $errMsg;
-                            if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
+                            $statsLogBuffer .= $errMsg;
+                            $statsBufferCount++;
+                            if ($useRealTimeLogging && $statsBufferCount >= 20) {
+                                echo htmlspecialchars($statsLogBuffer); ob_flush(); flush();
+                                $statsLogBuffer = ""; $statsBufferCount = 0;
+                            }
                             $statsErrorCount++;
                             $failedArtists[] = $artistId;
                         }
@@ -320,11 +403,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                     } catch (Exception $e) {
                         $errMsg = "❌ " . $artistName . " -> Error: " . $e->getMessage() . "\n";
                         $logMessage .= $errMsg;
-                        if ($useRealTimeLogging) { echo htmlspecialchars($errMsg); ob_flush(); flush(); }
+                        $statsLogBuffer .= $errMsg;
+                        $statsBufferCount++;
+                        if ($useRealTimeLogging && $statsBufferCount >= 20) {
+                            echo htmlspecialchars($statsLogBuffer); ob_flush(); flush();
+                            $statsLogBuffer = ""; $statsBufferCount = 0;
+                        }
                         $statsErrorCount++;
                         $failedArtists[] = $artistId;
                     }
                 }
+                
+                // Flush any remaining buffered logs for artists
+                if ($useRealTimeLogging && !empty($statsLogBuffer)) {
+                    echo htmlspecialchars($statsLogBuffer);
+                    ob_flush();
+                    flush();
+                }
+                
+                // Close artist cURL handle
+                curl_close($chArtist);
+                
+                $statsTotalTime = round(microtime(true) - $statsStartTime, 2);
+                $statsAvgTime = count($artists) > 0 ? round($statsTotalTime / count($artists), 3) : 0;
                 
                 // Batch insert all collected artist stats
                 if (!empty($statsDataBatch)) {
@@ -346,6 +447,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['get_data'])) {
                 $statsSummary = "\n=== Stats Summary ===\n";
                 $statsSummary .= "✅ Success: " . $statsSuccessCount . " artists\n";
                 $statsSummary .= "❌ Errors: " . $statsErrorCount . " artists\n";
+                $statsSummary .= "⏱️ Total Time: {$statsTotalTime}s (avg: {$statsAvgTime}s per artist)\n";
                 if (!empty($failedArtists)) {
                     $statsSummary .= "\n🔴 Failed Artist IDs:\n";
                     foreach ($failedArtists as $failedId) {

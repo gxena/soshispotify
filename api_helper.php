@@ -1631,17 +1631,15 @@ function getAllTimeRecordBreakers($filter = 'all') {
                     t.track_id,
                     t.track_name,
                     ar.artist_name,
-                    (COALESCE(s_today.stream_count, 0) - COALESCE(s_yesterday.stream_count, 0)) as today_streams,
-                    (SELECT MAX(s2.stream_count - COALESCE(s3.stream_count, 0))
+                    COALESCE(s_today.stream_count, 0) as today_total,
+                    COALESCE(s_yesterday.stream_count, 0) as yesterday_total,
+                    (SELECT MAX(s2.stream_count - s3.stream_count)
                      FROM streams s2
-                     LEFT JOIN streams s3 ON s2.track_id = s3.track_id 
-                         AND s3.stream_date = (SELECT MAX(s4.stream_date) 
-                                               FROM streams s4 
-                                               WHERE s4.track_id = s2.track_id 
-                                               AND s4.stream_date < s2.stream_date)
+                     INNER JOIN streams s3 
+                         ON s2.track_id = s3.track_id 
+                         AND s3.stream_date = DATE_SUB(s2.stream_date, INTERVAL 1 DAY)
                      WHERE s2.track_id = t.track_id 
-                     AND s2.stream_date < ?
-                     AND s3.stream_date IS NOT NULL) as previous_record
+                     AND s2.stream_date < ?) as previous_record
                 FROM track t
                 JOIN track_artist ta ON t.track_id = ta.track_id
                 JOIN artist ar ON ta.artist_id = ar.artist_id
@@ -1656,17 +1654,31 @@ function getAllTimeRecordBreakers($filter = 'all') {
             $sql .= getAnalyticsFilterCondition($filter, $types, $params);
         }
         
-        $sql .= " HAVING previous_record IS NOT NULL AND today_streams > previous_record
-                  ORDER BY today_streams DESC";
+        $sql .= " HAVING yesterday_total > 0 AND today_total > yesterday_total 
+                  AND previous_record IS NOT NULL 
+                  AND (today_total - yesterday_total) > previous_record
+                  ORDER BY (today_total - yesterday_total) DESC";
         
         $stmt = $conn->prepare($sql);
         $stmt->bind_param($types, ...$params);
         $stmt->execute();
-        $result = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $result = $stmt->get_result();
+        
+        $data = [];
+        while ($row = $result->fetch_assoc()) {
+            $data[] = [
+                'track_id' => $row['track_id'],
+                'track_name' => $row['track_name'],
+                'artist_name' => $row['artist_name'],
+                'today_streams' => $row['today_total'] - $row['yesterday_total'],
+                'previous_record' => $row['previous_record']
+            ];
+        }
+        
         $stmt->close();
         $conn->close();
         
-        return $result;
+        return $data;
     } catch (Exception $e) {
         error_log("getAllTimeRecordBreakers error: " . $e->getMessage());
         return [];
@@ -1695,18 +1707,16 @@ function get2026RecordBreakers($filter = 'all') {
                     t.track_id,
                     t.track_name,
                     ar.artist_name,
-                    (COALESCE(s_today.stream_count, 0) - COALESCE(s_yesterday.stream_count, 0)) as today_streams,
-                    (SELECT MAX(s2.stream_count - COALESCE(s3.stream_count, 0))
+                    COALESCE(s_today.stream_count, 0) as today_total,
+                    COALESCE(s_yesterday.stream_count, 0) as yesterday_total,
+                    (SELECT MAX(s2.stream_count - s3.stream_count)
                      FROM streams s2
-                     LEFT JOIN streams s3 ON s2.track_id = s3.track_id 
-                         AND s3.stream_date = (SELECT MAX(s4.stream_date) 
-                                               FROM streams s4 
-                                               WHERE s4.track_id = s2.track_id 
-                                               AND s4.stream_date < s2.stream_date)
+                     INNER JOIN streams s3 
+                         ON s2.track_id = s3.track_id 
+                         AND s3.stream_date = DATE_SUB(s2.stream_date, INTERVAL 1 DAY)
                      WHERE s2.track_id = t.track_id 
                      AND s2.stream_date >= '2026-01-01'
-                     AND s2.stream_date < ?
-                     AND s3.stream_date IS NOT NULL) as previous_record
+                     AND s2.stream_date < ?) as previous_record
                 FROM track t
                 JOIN track_artist ta ON t.track_id = ta.track_id
                 JOIN artist ar ON ta.artist_id = ar.artist_id
@@ -1721,17 +1731,31 @@ function get2026RecordBreakers($filter = 'all') {
             $sql .= getAnalyticsFilterCondition($filter, $types, $params);
         }
         
-        $sql .= " HAVING previous_record IS NOT NULL AND today_streams > previous_record
-                  ORDER BY today_streams DESC";
+        $sql .= " HAVING yesterday_total > 0 AND today_total > yesterday_total 
+                  AND previous_record IS NOT NULL 
+                  AND (today_total - yesterday_total) > previous_record
+                  ORDER BY (today_total - yesterday_total) DESC";
         
         $stmt = $conn->prepare($sql);
         $stmt->bind_param($types, ...$params);
         $stmt->execute();
-        $result = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $result = $stmt->get_result();
+        
+        $data = [];
+        while ($row = $result->fetch_assoc()) {
+            $data[] = [
+                'track_id' => $row['track_id'],
+                'track_name' => $row['track_name'],
+                'artist_name' => $row['artist_name'],
+                'today_streams' => $row['today_total'] - $row['yesterday_total'],
+                'previous_record' => $row['previous_record']
+            ];
+        }
+        
         $stmt->close();
         $conn->close();
         
-        return $result;
+        return $data;
     } catch (Exception $e) {
         error_log("get2026RecordBreakers error: " . $e->getMessage());
         return [];
@@ -1868,8 +1892,39 @@ function getBiggestDailyChanges($filter = 'all', $changeType = 'value', $limit =
     }
 }
 
-// Get tracks/albums approaching milestones (every 5M)
-function getMilestoneTracker($filter = 'all', $maxDaysRemaining = 30) {
+// Helper function to calculate next milestone based on type
+function getNextMilestone($current, $type) {
+    if ($type === 'track') {
+        // Song: 1m, 5m, 10m, 15m, then every 5m
+        if ($current < 1000000) {
+            return 1000000;
+        } elseif ($current < 5000000) {
+            return 5000000;
+        } elseif ($current < 10000000) {
+            return 10000000;
+        } elseif ($current < 15000000) {
+            return 15000000;
+        } else {
+            return ceil($current / 5000000) * 5000000;
+        }
+    } else {
+        // Album: 5m, 10m, 20m, 30m, then every 10m
+        if ($current < 5000000) {
+            return 5000000;
+        } elseif ($current < 10000000) {
+            return 10000000;
+        } elseif ($current < 20000000) {
+            return 20000000;
+        } elseif ($current < 30000000) {
+            return 30000000;
+        } else {
+            return ceil($current / 10000000) * 10000000;
+        }
+    }
+}
+
+// Get tracks/albums approaching milestones
+function getMilestoneTracker($filter = 'all', $maxDaysRemaining = 14) {
     try {
         $conn = getDBConnection();
         $results = [];
@@ -1923,7 +1978,7 @@ function getMilestoneTracker($filter = 'all', $maxDaysRemaining = 30) {
             
             if ($dailyStreams <= 0) continue; // Skip if no daily growth
             
-            $nextMilestone = ceil($current / 5000000) * 5000000;
+            $nextMilestone = getNextMilestone($current, 'track');
             $remaining = $nextMilestone - $current;
             
             if ($remaining <= 0) continue; // Skip if already past milestone
@@ -1983,7 +2038,7 @@ function getMilestoneTracker($filter = 'all', $maxDaysRemaining = 30) {
             
             if ($dailyStreams <= 0) continue; // Skip if no daily growth
             
-            $nextMilestone = ceil($current / 5000000) * 5000000;
+            $nextMilestone = getNextMilestone($current, 'album');
             $remaining = $nextMilestone - $current;
             
             if ($remaining <= 0) continue; // Skip if already past milestone
@@ -2030,5 +2085,199 @@ function getRecordBreakersCount($filter = 'all', $type = 'all-time') {
 // Get count of milestone trackers
 function getMilestoneTrackerCount($filter = 'all') {
     return count(getMilestoneTracker($filter));
+}
+
+// Helper function to get previous milestone
+function getPreviousMilestone($current, $type) {
+    if ($type === 'track') {
+        // Song: 1m, 5m, 10m, 15m, then every 5m
+        if ($current < 1000000) {
+            return 0;
+        } elseif ($current < 5000000) {
+            return 1000000;
+        } elseif ($current < 10000000) {
+            return 5000000;
+        } elseif ($current < 15000000) {
+            return 10000000;
+        } elseif ($current < 20000000) {
+            return 15000000;
+        } else {
+            return floor($current / 5000000) * 5000000;
+        }
+    } else {
+        // Album: 5m, 10m, 20m, 30m, then every 10m
+        if ($current < 5000000) {
+            return 0;
+        } elseif ($current < 10000000) {
+            return 5000000;
+        } elseif ($current < 20000000) {
+            return 10000000;
+        } elseif ($current < 30000000) {
+            return 20000000;
+        } elseif ($current < 40000000) {
+            return 30000000;
+        } else {
+            return floor($current / 10000000) * 10000000;
+        }
+    }
+}
+
+// Get tracks/albums that recently passed milestones (within past 2 days)
+function getRecentMilestonePassed($filter = 'all') {
+    try {
+        $conn = getDBConnection();
+        $results = [];
+        
+        $latestDate = getLatestStreamDate();
+        
+        // Get previous date for daily calculation
+        $prevStmt = $conn->prepare("SELECT MAX(stream_date) as prev FROM streams WHERE stream_date < ?");
+        $prevStmt->bind_param('s', $latestDate);
+        $prevStmt->execute();
+        $prevDate = $prevStmt->get_result()->fetch_assoc()['prev'] ?? null;
+        $prevStmt->close();
+        
+        if (!$prevDate) {
+            $conn->close();
+            return [];
+        }
+        
+        // Get tracks
+        $sql = "SELECT 
+                    'track' as type,
+                    t.track_id,
+                    t.track_name as name,
+                    ar.artist_name,
+                    COALESCE(s_today.stream_count, 0) as current_streams,
+                    COALESCE(s_yesterday.stream_count, 0) as yesterday_streams
+                FROM track t
+                JOIN track_artist ta ON t.track_id = ta.track_id
+                JOIN artist ar ON ta.artist_id = ar.artist_id
+                LEFT JOIN streams s_today ON t.track_id = s_today.track_id AND s_today.stream_date = ?
+                LEFT JOIN streams s_yesterday ON t.track_id = s_yesterday.track_id AND s_yesterday.stream_date = ?
+                WHERE 1=1";
+        
+        $params = [$latestDate, $prevDate];
+        $types = 'ss';
+        
+        if ($filter != 'all') {
+            $sql .= getAnalyticsFilterCondition($filter, $types, $params);
+        }
+        
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param($types, ...$params);
+        $stmt->execute();
+        $trackResult = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt->close();
+        
+        foreach ($trackResult as $item) {
+            $current = $item['current_streams'];
+            $yesterday = $item['yesterday_streams'];
+            
+            if ($yesterday <= 0) continue; // Need yesterday data for daily calculation
+            
+            $dailyStreams = $current - $yesterday;
+            if ($dailyStreams <= 0) continue; // Need positive growth
+            
+            // Find the most recent milestone that was passed
+            $previousMilestone = getPreviousMilestone($current, 'track');
+            
+            if ($previousMilestone > 0 && $current >= $previousMilestone) {
+                // Calculate how many days ago the milestone was passed
+                $streamsSinceMilestone = $current - $previousMilestone;
+                $daysAgo = $streamsSinceMilestone / $dailyStreams;
+                
+                // Only include if passed within last 2 days
+                if ($daysAgo <= 2.0) {
+                    $results[] = [
+                        'type' => 'track',
+                        'name' => $item['name'],
+                        'artist_name' => $item['artist_name'],
+                        'current_streams' => $current,
+                        'daily_streams' => $dailyStreams,
+                        'milestone_passed' => $previousMilestone,
+                        'days_ago' => $daysAgo
+                    ];
+                }
+            }
+        }
+        
+        // Get albums
+        $sql2 = "SELECT 
+                    'album' as type,
+                    a.album_id,
+                    a.album_name as name,
+                    ar.artist_name,
+                    SUM(COALESCE(s_today.stream_count, 0)) as current_streams,
+                    SUM(COALESCE(s_yesterday.stream_count, 0)) as yesterday_streams
+                FROM album a
+                JOIN album_artist aa ON a.album_id = aa.album_id
+                JOIN artist ar ON aa.artist_id = ar.artist_id
+                JOIN album_track at ON a.album_id = at.album_id
+                JOIN track t ON at.track_id = t.track_id
+                LEFT JOIN streams s_today ON t.track_id = s_today.track_id AND s_today.stream_date = ?
+                LEFT JOIN streams s_yesterday ON t.track_id = s_yesterday.track_id AND s_yesterday.stream_date = ?
+                WHERE 1=1";
+        
+        $params2 = [$latestDate, $prevDate];
+        $types2 = 'ss';
+        
+        if ($filter != 'all') {
+            $sql2 .= getAnalyticsFilterCondition($filter, $types2, $params2);
+        }
+        
+        $sql2 .= " GROUP BY a.album_id, a.album_name, ar.artist_name";
+        
+        $stmt2 = $conn->prepare($sql2);
+        $stmt2->bind_param($types2, ...$params2);
+        $stmt2->execute();
+        $albumResult = $stmt2->get_result()->fetch_all(MYSQLI_ASSOC);
+        $stmt2->close();
+        
+        foreach ($albumResult as $item) {
+            $current = $item['current_streams'];
+            $yesterday = $item['yesterday_streams'];
+            
+            if ($yesterday <= 0) continue;
+            
+            $dailyStreams = $current - $yesterday;
+            if ($dailyStreams <= 0) continue;
+            
+            $previousMilestone = getPreviousMilestone($current, 'album');
+            
+            if ($previousMilestone > 0 && $current >= $previousMilestone) {
+                $streamsSinceMilestone = $current - $previousMilestone;
+                $daysAgo = $streamsSinceMilestone / $dailyStreams;
+                
+                if ($daysAgo <= 2.0) {
+                    $results[] = [
+                        'type' => 'album',
+                        'name' => $item['name'],
+                        'artist_name' => $item['artist_name'],
+                        'current_streams' => $current,
+                        'daily_streams' => $dailyStreams,
+                        'milestone_passed' => $previousMilestone,
+                        'days_ago' => $daysAgo
+                    ];
+                }
+            }
+        }
+        
+        // Sort by days ago (most recent first)
+        usort($results, function($a, $b) {
+            return $a['days_ago'] <=> $b['days_ago'];
+        });
+        
+        $conn->close();
+        return $results;
+    } catch (Exception $e) {
+        error_log("getRecentMilestonePassed error: " . $e->getMessage());
+        return [];
+    }
+}
+
+// Get count of recent milestone passed
+function getRecentMilestonePassedCount($filter = 'all') {
+    return count(getRecentMilestonePassed($filter));
 }
 ?>

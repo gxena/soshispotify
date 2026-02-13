@@ -275,7 +275,7 @@ $displayDate = date('d M Y', strtotime($latestDate));
             <!-- Milestone Tracker -->
             <div class="analytics-section">
                 <div class="section-header">
-                    <h2><i class="fas fa-flag-checkered"></i> Approaching Milestones (5M Intervals)</h2>
+                    <h2><i class="fas fa-flag-checkered"></i> Approaching Milestones</h2>
                     <span class="badge"><?php echo getMilestoneTrackerCount($filter); ?></span>
                 </div>
                 <table class="analytics-table">
@@ -336,14 +336,65 @@ $displayDate = date('d M Y', strtotime($latestDate));
                 </table>
             </div>
 
-            <!-- Biggest Daily Changes -->
+            <!-- Recent Milestones Passed -->
             <div class="analytics-section">
                 <div class="section-header">
-                    <h2><i class="fas fa-chart-line"></i> Top 20 Daily Changes</h2>
+                    <h2><i class="fas fa-check-circle"></i> Recently Passed Milestones</h2>
+                    <span class="badge"><?php echo getRecentMilestonePassedCount($filter); ?></span>
                 </div>
-                <div id="daily-changes-container">
-                    <?php include 'get_daily_changes.php'; ?>
-                </div>
+                <table class="analytics-table">
+                    <thead>
+                        <tr>
+                            <th>Song / Album</th>
+                            <th>Type</th>
+                            <th class="right">Current Streams</th>
+                            <th class="right">Daily Streams</th>
+                            <th class="right">Milestone Passed</th>
+                            <th class="right">Days Ago</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php 
+                        $recentPassed = getRecentMilestonePassed($filter);
+                        if (empty($recentPassed)): 
+                        ?>
+                            <tr><td colspan="6" style="text-align: center; color: var(--text-secondary); padding: 2rem;">No milestones passed in the last 2 days</td></tr>
+                        <?php else: 
+                            foreach ($recentPassed as $item): 
+                        ?>
+                            <tr>
+                                <td>
+                                    <div class="track-name"><?php echo htmlspecialchars($item['name']); ?></div>
+                                    <?php if ($item['type'] == 'track'): ?>
+                                        <div class="artist-name"><?php echo htmlspecialchars($item['artist_name']); ?></div>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span class="milestone-badge">
+                                        <?php echo $item['type'] == 'track' ? 'Song' : 'Album'; ?>
+                                    </span>
+                                </td>
+                                <td class="right">
+                                    <span class="number"><?php echo number_format($item['current_streams']); ?></span>
+                                </td>
+                                <td class="right">
+                                    <span class="number"><?php echo number_format($item['daily_streams']); ?></span>
+                                </td>
+                                <td class="right">
+                                    <strong style="color: var(--success);">
+                                        <i class="fas fa-trophy"></i> <?php echo number_format($item['milestone_passed']); ?>
+                                    </strong>
+                                </td>
+                                <td class="right">
+                                    <strong style="color: var(--accent);"><?php echo number_format($item['days_ago'], 1); ?> days</strong>
+                                </td>
+                            </tr>
+                        <?php 
+                            endforeach;
+                        endif; 
+                        ?>
+                    </tbody>
+                </table>
             </div>
 
             <div class="grid-2">
@@ -435,6 +486,16 @@ $displayDate = date('d M Y', strtotime($latestDate));
                             ?>
                         </tbody>
                     </table>
+                </div>
+            </div>
+
+            <!-- Biggest Daily Changes -->
+            <div class="analytics-section">
+                <div class="section-header">
+                    <h2><i class="fas fa-chart-line"></i> Top 20 Daily Changes</h2>
+                </div>
+                <div id="daily-changes-container">
+                    <?php include 'get_daily_changes.php'; ?>
                 </div>
             </div>
                 </table>
